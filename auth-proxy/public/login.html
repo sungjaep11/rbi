@@ -81,15 +81,6 @@
   </main>
 
   <script>
-    // Unregister any Service Workers left behind by the webtop app.
-    // They intercept fetch requests (including POST /login) and return stale
-    // cached responses, causing "Server error" until a hard refresh clears them.
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(function(registrations) {
-        registrations.forEach(function(r) { r.unregister(); });
-      });
-    }
-
     const form = document.getElementById('loginForm');
     const usernameInput = document.getElementById('username');
     const passwordInput = document.getElementById('password');
