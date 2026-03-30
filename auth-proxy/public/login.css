@@ -1,0 +1,301 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:        #0d1117;
+  --bg2:       #161b22;
+  --border:    #30363d;
+  --border-focus: #58a6ff;
+  --text:      #e6edf3;
+  --text-muted:#8b949e;
+  --accent:    #238636;
+  --accent-hover: #2ea043;
+  --accent-active: #196c2e;
+  --error:     #f85149;
+  --error-bg:  #1a0a0a;
+  --warning:   #d29922;
+  --warning-bg:#1a1500;
+  --radius:    10px;
+  --transition: 160ms ease;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle animated background grid */
+.bg {
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(88, 166, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(88, 166, 255, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Card */
+.card {
+  position: relative;
+  z-index: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 400px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04) inset,
+    0 24px 48px rgba(0,0,0,0.5);
+}
+
+/* Logo */
+.logo {
+  width: 52px;
+  height: 52px;
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.25rem;
+  color: #58a6ff;
+}
+
+.logo svg {
+  width: 28px;
+  height: 28px;
+}
+
+/* Heading */
+h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 0.35rem;
+  margin-bottom: 1.75rem;
+}
+
+/* Alert banner */
+.alert {
+  display: none;
+  font-size: 0.83rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  line-height: 1.4;
+}
+
+.alert.visible {
+  display: block;
+}
+
+.alert.error {
+  background: var(--error-bg);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  color: #ff7b72;
+}
+
+.alert.warning {
+  background: var(--warning-bg);
+  border: 1px solid rgba(210, 153, 34, 0.35);
+  color: #e3b341;
+}
+
+/* Form fields */
+.field {
+  margin-bottom: 1.1rem;
+}
+
+label {
+  display: block;
+  font-size: 0.83rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.input-wrap {
+  position: relative;
+}
+
+.input-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.9rem;
+  padding: 0.6rem 2.5rem 0.6rem 2.4rem;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  -webkit-appearance: none;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12);
+}
+
+input.invalid {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.12);
+}
+
+input::placeholder {
+  color: #484f58;
+}
+
+input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Password toggle button */
+.toggle-pw {
+  position: absolute;
+  right: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem;
+  color: var(--text-muted);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  transition: color var(--transition);
+}
+
+.toggle-pw:hover {
+  color: var(--text);
+}
+
+.toggle-pw svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Field-level error */
+.field-error {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--error);
+  margin-top: 0.3rem;
+  min-height: 1em;
+}
+
+/* Submit button */
+.btn-submit {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  transition: background var(--transition), opacity var(--transition);
+  position: relative;
+}
+
+.btn-submit:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-submit:active:not(:disabled) {
+  background: var(--accent-active);
+}
+
+.btn-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Spinner */
+.btn-spinner {
+  display: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+.btn-submit.loading .btn-text::after {
+  content: "ing…";
+}
+
+.btn-submit.loading .btn-text {
+  font-size: 0; /* hide original text */
+}
+
+/* Simpler approach: just show spinner and change text */
+.btn-submit.loading .btn-text {
+  font-size: 0.9rem;
+}
+
+.btn-submit:not(.loading) .btn-spinner { display: none; }
+.btn-submit.loading .btn-spinner       { display: block; }
+.btn-submit.loading .btn-text          { opacity: 0.7; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 420px) {
+  .card {
+    padding: 2rem 1.25rem;
+    border-radius: 12px;
+  }
+}

@@ -1,0 +1,30 @@
+services:
+  auth-proxy:
+    build: ./auth-proxy
+    container_name: auth-proxy
+    ports:
+      - "8080:8080"
+    environment:
+      - WEBTOP_URL=http://webtop:3000
+      - SESSION_SECRET=${SESSION_SECRET}
+      - PORT=8080
+    volumes:
+      - ./auth-proxy/db:/app/db
+    depends_on:
+      - webtop
+    restart: unless-stopped
+
+  webtop:
+    image: lscr.io/linuxserver/webtop:ubuntu-xfce
+    container_name: webtop
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Seoul
+    volumes:
+      - webtop-config:/config
+    # NOT exposed to host — only accessible through auth-proxy
+    restart: unless-stopped
+
+volumes:
+  webtop-config:
