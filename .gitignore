@@ -1,0 +1,12 @@
+# Environment
+.env
+
+# User database (contains hashed passwords)
+auth-proxy/db/users.json
+
+# Node
+auth-proxy/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
