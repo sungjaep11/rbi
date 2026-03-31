@@ -4,9 +4,10 @@ const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const { createProxyMiddleware, responseInterceptor } = require('http-proxy-middleware');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -83,6 +84,10 @@ app.post('/logout', (req, res) => {
   req.session.destroy(() => {
     res.clearCookie('connect.sid');
     res.redirect('/login');
+    exec('docker exec webtop rm -rf /config/.cache/sessions && docker restart webtop', (err) => {
+      if (err) console.error('[logout] failed to reset webtop:', err.message);
+      else console.log('[logout] webtop session cleared and restarted');
+    });
   });
 });
 
@@ -161,12 +166,48 @@ app.delete('/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
 // Webtop reverse proxy (authenticated)
 // ---------------------------------------------------------------------------
 
+const LOGOUT_BUTTON_HTML = `
+<style>
+  #rbi-logout-form {
+    position: fixed;
+    bottom: 12px;
+    right: 12px;
+    z-index: 99999;
+    margin: 0;
+  }
+  #rbi-logout-btn {
+    padding: 6px 14px;
+    background: rgba(30,30,30,0.85);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px;
+    font-family: sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+  }
+  #rbi-logout-btn:hover { background: rgba(200,40,40,0.9); }
+</style>
+<form id="rbi-logout-form" action="/logout" method="POST" onsubmit="document.cookie.split(';').forEach(function(c){document.cookie=c.replace(/^ +/,'').replace(/=.*/,'=;expires='+new Date(0).toUTCString()+';path=/');})">
+  <button id="rbi-logout-btn" type="submit">Logout</button>
+</form>
+`;
+
 const webtopProxy = createProxyMiddleware({
   target: WEBTOP_URL,
   changeOrigin: true,
-  ws: true, // WebSocket support for Selkies/WebRTC
+  selfHandleResponse: true,
   on: {
-    error: (err, req, res) => {
+    proxyRes: responseInterceptor(async (responseBuffer, proxyRes) => {
+      const contentType = proxyRes.headers['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        const html = responseBuffer.toString('utf8');
+        const tag = html.includes('</body>') ? '</body>' : '</html>';
+        return html.replace(tag, LOGOUT_BUTTON_HTML + tag);
+      }
+      return responseBuffer;
+    }),
+    error: (err, _req, res) => {
       console.error('[proxy error]', err.message);
       if (res.writeHead) {
         res.writeHead(502);
@@ -174,6 +215,7 @@ const webtopProxy = createProxyMiddleware({
       }
     },
   },
+  ws: true,
 });
 
 app.use('/', requireAuth, webtopProxy);
