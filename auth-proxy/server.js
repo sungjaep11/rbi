@@ -4,19 +4,22 @@ const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
-const { createProxyMiddleware, responseInterceptor } = require('http-proxy-middleware');
+const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
+const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
+const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — users
 // ---------------------------------------------------------------------------
 
 function readUsers() {
@@ -26,6 +29,116 @@ function readUsers() {
 
 function writeUsers(users) {
   fs.writeFileSync(DB_PATH, JSON.stringify(users, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — sessions
+// ---------------------------------------------------------------------------
+
+function readSessions() {
+  if (!fs.existsSync(SESSIONS_PATH)) return {};
+  return JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf8'));
+}
+
+function writeSessions(sessions) {
+  fs.writeFileSync(SESSIONS_PATH, JSON.stringify(sessions, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — User-Agent 파싱
+// ---------------------------------------------------------------------------
+
+function parseUserAgent(ua) {
+  if (!ua) return { browser: '알 수 없음', device: '알 수 없음' };
+
+  let browser = '알 수 없음';
+  if (/Edg\//.test(ua))                              browser = 'Edge';
+  else if (/OPR\/|Opera/.test(ua))                   browser = 'Opera';
+  else if (/SamsungBrowser\//.test(ua))              browser = 'Samsung Internet';
+  else if (/Chrome\//.test(ua))                      browser = 'Chrome';
+  else if (/Firefox\//.test(ua))                     browser = 'Firefox';
+  else if (/Safari\//.test(ua) && /Version\//.test(ua)) browser = 'Safari';
+
+  const versionMatch = ua.match(/(Edg|OPR|SamsungBrowser|Chrome|Firefox|Version)\/([\d]+)/);
+  if (versionMatch) browser = `${browser} ${versionMatch[2]}`;
+
+  let device = '알 수 없음';
+  if (/Android/.test(ua))       device = 'Android';
+  else if (/iPhone/.test(ua))   device = 'iPhone';
+  else if (/iPad/.test(ua))     device = 'iPad';
+  else if (/Windows/.test(ua))  device = 'Windows';
+  else if (/Macintosh/.test(ua)) device = 'macOS';
+  else if (/Linux/.test(ua))    device = 'Linux';
+
+  return { browser, device };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — IP 위치 조회 (비동기, 로그인 차단 없음)
+// ---------------------------------------------------------------------------
+
+const PRIVATE_IP_RE = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$)/;
+
+function lookupLocation(ip, sessionId) {
+  const cleanIp = ip.replace(/^::ffff:/, '');
+  if (PRIVATE_IP_RE.test(cleanIp) || cleanIp === 'localhost') return;
+
+  https.get(`https://ip-api.com/json/${cleanIp}?fields=status,country,city&lang=ko`, (res) => {
+    let raw = '';
+    res.on('data', chunk => raw += chunk);
+    res.on('end', () => {
+      try {
+        const json = JSON.parse(raw);
+        if (json.status === 'success') {
+          const location = [json.city, json.country].filter(Boolean).join(', ');
+          const sessions = readSessions();
+          if (sessions[sessionId]) {
+            sessions[sessionId].location = location;
+            writeSessions(sessions);
+          }
+        }
+      } catch (_) {}
+    });
+  }).on('error', () => {});
+}
+
+function addSession(sessionId, username, ip, ua) {
+  const sessions = readSessions();
+  const now = Date.now();
+  const { browser, device } = parseUserAgent(ua);
+  sessions[sessionId] = {
+    username,
+    ip,
+    browser,
+    device,
+    location: null,
+    startTime: new Date(now).toISOString(),
+    lastActivity: new Date(now).toISOString(),
+    expiresAt: new Date(now + SESSION_MAX_AGE).toISOString(),
+    terminated: false,
+  };
+  writeSessions(sessions);
+  lookupLocation(ip, sessionId);
+}
+
+function removeSession(sessionId) {
+  const sessions = readSessions();
+  delete sessions[sessionId];
+  writeSessions(sessions);
+}
+
+// Throttle file writes: update lastActivity at most once per 30s per session
+const activityThrottles = new Map();
+function touchSession(sessionId) {
+  const now = Date.now();
+  const last = activityThrottles.get(sessionId) || 0;
+  if (now - last < 30_000) return;
+  activityThrottles.set(sessionId, now);
+  const sessions = readSessions();
+  if (sessions[sessionId]) {
+    sessions[sessionId].lastActivity = new Date(now).toISOString();
+    writeSessions(sessions);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +155,7 @@ const sessionMiddleware = session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    maxAge: SESSION_MAX_AGE,
   },
 });
 app.use(sessionMiddleware);
@@ -76,13 +189,20 @@ app.post('/login', (req, res) => {
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: 'Session error.' });
     req.session.user = { username: user.username, role: user.role };
-    res.json({ redirect: '/' });
+    req.session.expiresAt = new Date(Date.now() + SESSION_MAX_AGE).toISOString();
+    req.session.save(() => {
+      const clientIp = (req.ip || '').replace(/^::ffff:/, '');
+      addSession(req.session.id, user.username, clientIp, req.headers['user-agent']);
+      res.json({ redirect: '/' });
+    });
   });
 });
 
 app.post('/logout', (req, res) => {
+  const sessionId = req.session.id;
   req.session.destroy(() => {
     res.clearCookie('connect.sid');
+    removeSession(sessionId);
     res.redirect('/login');
     exec('docker exec webtop rm -rf /config/.cache/sessions && docker restart webtop', (err) => {
       if (err) console.error('[logout] failed to reset webtop:', err.message);
@@ -96,11 +216,25 @@ app.post('/logout', (req, res) => {
 // ---------------------------------------------------------------------------
 
 function requireAuth(req, res, next) {
-  if (req.session.user) return next();
-  if (req.headers['accept']?.includes('application/json')) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.session.user) {
+    if (req.headers['accept']?.includes('application/json')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    return res.redirect('/login');
   }
-  res.redirect('/login');
+
+  // Check if this session was remotely terminated
+  const sessions = readSessions();
+  if (sessions[req.session.id]?.terminated) {
+    req.session.destroy(() => res.clearCookie('connect.sid'));
+    if (req.headers['accept']?.includes('application/json')) {
+      return res.status(401).json({ error: 'Session terminated' });
+    }
+    return res.redirect('/login');
+  }
+
+  touchSession(req.session.id);
+  next();
 }
 
 function requireAdmin(req, res, next) {
@@ -109,7 +243,133 @@ function requireAdmin(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
-// Admin API
+// RBI API — 현재 사용자 정보
+// ---------------------------------------------------------------------------
+
+app.get('/api/me', requireAuth, (req, res) => {
+  res.json({
+    username: req.session.user.username,
+    role: req.session.user.role,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RBI API — 세션 정보 / 연장
+// ---------------------------------------------------------------------------
+
+app.get('/api/session/info', requireAuth, (req, res) => {
+  res.json({
+    username: req.session.user.username,
+    expiresAt: req.session.expiresAt,
+  });
+});
+
+app.post('/api/session/extend', requireAuth, (req, res) => {
+  const newExpiresAt = new Date(Date.now() + SESSION_MAX_AGE).toISOString();
+  req.session.expiresAt = newExpiresAt;
+  req.session.cookie.maxAge = SESSION_MAX_AGE;
+
+  const sessions = readSessions();
+  if (sessions[req.session.id]) {
+    sessions[req.session.id].expiresAt = newExpiresAt;
+    writeSessions(sessions);
+  }
+
+  req.session.save(() => res.json({ expiresAt: newExpiresAt }));
+});
+
+// ---------------------------------------------------------------------------
+// RBI API — 활성 세션 목록 / 강제 종료
+// ---------------------------------------------------------------------------
+
+app.get('/api/sessions', requireAuth, (req, res) => {
+  const sessions = readSessions();
+  const { username, role } = req.session.user;
+
+  const list = Object.entries(sessions)
+    .filter(([, s]) => !s.terminated && (role === 'admin' || s.username === username))
+    .map(([id, s]) => ({
+      sessionId: id,
+      username: s.username,
+      ip: s.ip,
+      browser: s.browser || null,
+      device: s.device || null,
+      location: s.location || null,
+      startTime: s.startTime,
+      lastActivity: s.lastActivity,
+      expiresAt: s.expiresAt,
+      isCurrent: id === req.session.id,
+    }));
+
+  res.json(list);
+});
+
+app.delete('/api/sessions/:sessionId', requireAuth, (req, res) => {
+  const { sessionId } = req.params;
+  const { username, role } = req.session.user;
+
+  if (sessionId === req.session.id) {
+    return res.status(400).json({ error: '현재 세션은 이 API로 종료할 수 없습니다. /logout을 사용하세요.' });
+  }
+
+  const sessions = readSessions();
+  const target = sessions[sessionId];
+
+  if (!target) return res.status(404).json({ error: '세션을 찾을 수 없습니다.' });
+  if (role !== 'admin' && target.username !== username) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  sessions[sessionId].terminated = true;
+  writeSessions(sessions);
+  res.json({ ok: true });
+});
+
+app.delete('/api/sessions', requireAuth, (req, res) => {
+  const { username, role } = req.session.user;
+  const sessions = readSessions();
+
+  let count = 0;
+  for (const [id, s] of Object.entries(sessions)) {
+    if (id === req.session.id) continue;
+    if (role !== 'admin' && s.username !== username) continue;
+    sessions[id].terminated = true;
+    count++;
+  }
+
+  writeSessions(sessions);
+  res.json({ terminated: count });
+});
+
+// ---------------------------------------------------------------------------
+// RBI API — 비밀번호 변경
+// ---------------------------------------------------------------------------
+
+app.patch('/api/me/password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'currentPassword와 newPassword가 필요합니다.' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: '새 비밀번호는 6자 이상이어야 합니다.' });
+  }
+
+  const users = readUsers();
+  const idx = users.findIndex(u => u.username === req.session.user.username);
+  if (idx === -1) return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+
+  if (!bcrypt.compareSync(currentPassword, users[idx].passwordHash)) {
+    return res.status(401).json({ error: '현재 비밀번호가 올바르지 않습니다.' });
+  }
+
+  users[idx].passwordHash = bcrypt.hashSync(newPassword, 12);
+  writeUsers(users);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Admin API — 사용자 관리
 // ---------------------------------------------------------------------------
 
 app.get('/admin/users', requireAuth, requireAdmin, (req, res) => {
@@ -166,47 +426,11 @@ app.delete('/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
 // Webtop reverse proxy (authenticated)
 // ---------------------------------------------------------------------------
 
-const LOGOUT_BUTTON_HTML = `
-<style>
-  #rbi-logout-form {
-    position: fixed;
-    bottom: 12px;
-    right: 12px;
-    z-index: 99999;
-    margin: 0;
-  }
-  #rbi-logout-btn {
-    padding: 6px 14px;
-    background: rgba(30,30,30,0.85);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.25);
-    border-radius: 6px;
-    font-family: sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-    backdrop-filter: blur(4px);
-  }
-  #rbi-logout-btn:hover { background: rgba(200,40,40,0.9); }
-</style>
-<form id="rbi-logout-form" action="/logout" method="POST" onsubmit="document.cookie.split(';').forEach(function(c){document.cookie=c.replace(/^ +/,'').replace(/=.*/,'=;expires='+new Date(0).toUTCString()+';path=/');})">
-  <button id="rbi-logout-btn" type="submit">Logout</button>
-</form>
-`;
-
 const webtopProxy = createProxyMiddleware({
   target: WEBTOP_URL,
   changeOrigin: true,
-  selfHandleResponse: true,
+  ws: true,
   on: {
-    proxyRes: responseInterceptor(async (responseBuffer, proxyRes) => {
-      const contentType = proxyRes.headers['content-type'] || '';
-      if (contentType.includes('text/html')) {
-        const html = responseBuffer.toString('utf8');
-        const tag = html.includes('</body>') ? '</body>' : '</html>';
-        return html.replace(tag, LOGOUT_BUTTON_HTML + tag);
-      }
-      return responseBuffer;
-    }),
     error: (err, _req, res) => {
       console.error('[proxy error]', err.message);
       if (res.writeHead) {
@@ -215,7 +439,6 @@ const webtopProxy = createProxyMiddleware({
       }
     },
   },
-  ws: true,
 });
 
 app.use('/', requireAuth, webtopProxy);
@@ -230,17 +453,21 @@ const server = app.listen(PORT, () => {
 });
 
 // Forward WebSocket upgrades to webtop
-// Session middleware doesn't run on upgrade events, so run it manually
 server.on('upgrade', (req, socket, head) => {
-  // Run cookie + session middleware on the upgrade request
   cookieParser()(req, {}, () => {
     sessionMiddleware(req, {}, () => {
-      if (req.session?.user) {
-        webtopProxy.upgrade(req, socket, head);
-      } else {
+      if (!req.session?.user) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
+        return;
       }
+      const sessions = readSessions();
+      if (sessions[req.session.id]?.terminated) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      webtopProxy.upgrade(req, socket, head);
     });
   });
 });

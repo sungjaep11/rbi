@@ -94,30 +94,60 @@ docker-compose down -v
 rbi/
 ├── .env                        # 환경 변수 (SESSION_SECRET)
 ├── docker-compose.yml          # Docker 서비스 구성
-└── auth-proxy/
-    ├── Dockerfile              # auth-proxy 컨테이너 이미지
-    ├── package.json            # Node.js 의존성
-    ├── server.js               # Express 서버 (메인 진입점)
-    ├── public/
-    │   ├── login.html          # 로그인 페이지
-    │   └── login.css           # 로그인 페이지 스타일
-    ├── scripts/
-    │   └── create-admin.js     # 사용자 생성 CLI 스크립트
-    └── db/
-        └── users.json          # JSON 기반 사용자 데이터베이스
+├── auth-proxy/
+│   ├── Dockerfile              # auth-proxy 컨테이너 이미지
+│   ├── package.json            # Node.js 의존성
+│   ├── server.js               # Express 서버 (메인 진입점)
+│   ├── public/
+│   │   ├── login.html          # 로그인 페이지
+│   │   └── login.css           # 로그인 페이지 스타일
+│   ├── scripts/
+│   │   └── create-admin.js     # 사용자 생성 CLI 스크립트
+│   └── db/
+│       ├── users.json          # JSON 기반 사용자 데이터베이스
+│       └── sessions.json       # 활성 세션 목록
+├── static-web/
+│   └── selkies-dashboard/      # 대시보드 빌드 결과물 (npm run deploy로 생성)
+└── selkies/
+    └── addons/
+        └── selkies-dashboard/  # 대시보드 소스코드 (React/Vite)
 ```
 
 ## API 엔드포인트
 
-| 메서드 | 경로 | 설명 | 권한 |
-|--------|------|------|------|
-| GET | `/login` | 로그인 페이지 | 없음 |
-| POST | `/login` | 로그인 처리 | 없음 |
-| POST | `/logout` | 로그아웃 | 없음 |
-| GET | `/*` | WebTop 프록시 | 로그인 필요 |
-| GET | `/admin/users` | 사용자 목록 조회 | 관리자 |
-| POST | `/admin/users` | 사용자 생성 | 관리자 |
-| DELETE | `/admin/users/:username` | 사용자 삭제 | 관리자 |
+### 인증 (공개)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/login` | 로그인 페이지 |
+| POST | `/login` | 로그인 처리 |
+| POST | `/logout` | 로그아웃 및 WebTop 세션 초기화 |
+
+### 사용자 API (로그인 필요)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/me` | 현재 로그인 사용자 정보 조회 |
+| PATCH | `/api/me/password` | 비밀번호 변경 |
+| GET | `/api/session/info` | 현재 세션 만료 시간 조회 |
+| POST | `/api/session/extend` | 세션 만료 시간 연장 (+8시간) |
+| GET | `/api/sessions` | 활성 세션 목록 (관리자: 전체, 일반 사용자: 본인 것만) |
+| DELETE | `/api/sessions/:sessionId` | 특정 세션 강제 종료 |
+| DELETE | `/api/sessions` | 현재 세션 제외 전체 세션 강제 종료 |
+
+### 관리자 API (관리자 권한 필요)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/admin/users` | 사용자 목록 조회 |
+| POST | `/admin/users` | 사용자 생성 |
+| DELETE | `/admin/users/:username` | 사용자 삭제 |
+
+### WebTop 프록시
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| ALL | `/*` | WebTop으로 리버스 프록시 (로그인 필요, WebSocket 지원) |
 
 ## 환경 변수
 
@@ -133,11 +163,3 @@ rbi/
 - 세션 쿠키: `httpOnly`, `sameSite=lax`, 8시간 만료
 - 로그인 시 세션 재생성 (세션 고정 공격 방지)
 - WebTop 컨테이너는 외부에 직접 노출되지 않음
-
-## Docker 없이 로컬 실행 (개발용)
-
-```bash
-cd auth-proxy
-npm install
-SESSION_SECRET=dev-secret PORT=8080 WEBTOP_URL=http://localhost:3000 npm start
-```

@@ -24,6 +24,7 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - webtop-config:/config
+      - ./static-web/selkies-dashboard:/usr/share/selkies/selkies-dashboard
     # NOT exposed to host — only accessible through auth-proxy
     restart: unless-stopped
 
