@@ -1,0 +1,134 @@
+{
+  "fnmYc1XA22a_qffWPBgVPofKP52_ZbOk": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:07:34.975Z",
+    "lastActivity": "2026-04-12T15:07:34.993Z",
+    "expiresAt": "2026-04-12T23:07:34.975Z",
+    "terminated": true
+  },
+  "FTdJ6Td2TLv3RHoVrZHCmBrrxsInj0di": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:07:54.937Z",
+    "lastActivity": "2026-04-12T15:07:54.952Z",
+    "expiresAt": "2026-04-12T23:07:54.937Z",
+    "terminated": true
+  },
+  "0-3txli4Dy81m8KNyJ890Z4UYBTfUrVW": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:08:00.189Z",
+    "lastActivity": "2026-04-12T15:08:00.203Z",
+    "expiresAt": "2026-04-12T23:08:00.189Z",
+    "terminated": true
+  },
+  "fG0NO_jGv6SWa7vR9X_rQ5PbztySs9et": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:14:23.424Z",
+    "lastActivity": "2026-04-12T15:14:23.439Z",
+    "expiresAt": "2026-04-12T23:14:23.424Z",
+    "terminated": true
+  },
+  "jlS8LAClD23MHLK842SdVuxjPQbSPV-l": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:22:37.898Z",
+    "lastActivity": "2026-04-12T15:22:37.913Z",
+    "expiresAt": "2026-04-12T23:22:37.898Z",
+    "terminated": true
+  },
+  "YG9yuX8XFh_21cNrUaHwj3B8l4K6pdUf": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:31:27.103Z",
+    "lastActivity": "2026-04-12T15:31:27.119Z",
+    "expiresAt": "2026-04-12T23:31:27.103Z",
+    "terminated": true
+  },
+  "r5UgE1JuwlHlQXZpDFz6rkQTJJxENtgI": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T15:52:03.069Z",
+    "lastActivity": "2026-04-12T15:59:57.428Z",
+    "expiresAt": "2026-04-12T23:52:03.069Z",
+    "terminated": true
+  },
+  "Se7o8fIwe1frPicaB1fys3lMofhLsX5d": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-12T16:17:47.997Z",
+    "lastActivity": "2026-04-12T16:41:41.867Z",
+    "expiresAt": "2026-04-13T00:19:54.104Z",
+    "terminated": true
+  },
+  "hvDdPZj9aapR2TnruIIGB5owNEt76b1W": {
+    "username": "admin",
+    "ip": "::ffff:172.18.0.1",
+    "startTime": "2026-04-13T06:37:56.499Z",
+    "lastActivity": "2026-04-13T06:37:56.517Z",
+    "expiresAt": "2026-04-13T14:37:56.499Z",
+    "terminated": true
+  },
+  "qJTqepJeXtCtEzSx6MGVxrTQBu-xXdw4": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "startTime": "2026-04-13T07:15:15.079Z",
+    "lastActivity": "2026-04-13T07:15:15.096Z",
+    "expiresAt": "2026-04-13T15:15:15.079Z",
+    "terminated": true
+  },
+  "93m2MxU4B5YmF0Jy1Ev0_Bj8mQQ35BBb": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "startTime": "2026-04-13T07:25:38.089Z",
+    "lastActivity": "2026-04-13T07:27:05.575Z",
+    "expiresAt": "2026-04-13T15:25:46.248Z",
+    "terminated": true
+  },
+  "uXhJEhOdqSbCC6qndG2L_cFlc9HAv1x_": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 146",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-04-13T07:52:47.342Z",
+    "lastActivity": "2026-04-13T07:52:47.359Z",
+    "expiresAt": "2026-04-13T15:52:47.342Z",
+    "terminated": false
+  },
+  "rSTIU2xjiF15q9IpKaARMut4UVLidWkr": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 146",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-04-13T07:53:35.646Z",
+    "lastActivity": "2026-04-13T08:36:10.310Z",
+    "expiresAt": "2026-04-13T15:53:35.646Z",
+    "terminated": false
+  },
+  "ao1qECTDfMZ3cTGK8I8p1XXNMfqtLWjP": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 146",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-04-13T11:38:52.246Z",
+    "lastActivity": "2026-04-13T11:38:52.264Z",
+    "expiresAt": "2026-04-13T19:38:52.246Z",
+    "terminated": false
+  },
+  "dGGmvyIbJoxoBShUspbK_K3g35747tGM": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 146",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-04-13T11:47:54.810Z",
+    "lastActivity": "2026-04-13T11:47:54.827Z",
+    "expiresAt": "2026-04-13T19:47:54.810Z",
+    "terminated": false
+  }
+}
