@@ -44,7 +44,20 @@ $secret = [System.Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random 
 SESSION_SECRET=여기에_랜덤한_긴_문자열_입력
 ```
 
-### 3. 컨테이너 빌드 및 실행
+### 3. 대시보드 빌드
+
+`static-web/`은 빌드 결과물이므로 저장소에 포함되어 있지 않습니다. Docker 실행 전에 직접 빌드해야 합니다.
+
+```bash
+cd selkies/addons/selkies-dashboard
+npm install
+npm run deploy
+cd ../../..
+```
+
+`npm run deploy`는 Vite로 번들을 생성한 뒤 결과물을 `static-web/selkies-dashboard/`로 자동 복사합니다.
+
+### 4. 컨테이너 빌드 및 실행
 
 ```bash
 docker-compose up --build -d
@@ -52,7 +65,7 @@ docker-compose up --build -d
 
 처음 실행 시 WebTop 이미지를 다운로드하므로 시간이 걸릴 수 있습니다.
 
-### 4. 관리자 계정 생성
+### 5. 관리자 계정 생성
 
 컨테이너가 실행된 후 관리자 계정을 생성합니다.
 
@@ -66,7 +79,7 @@ docker exec auth-proxy node scripts/create-admin.js <사용자명> <비밀번호
 docker exec auth-proxy node scripts/create-admin.js admin mypassword admin
 ```
 
-### 5. 접속
+### 6. 접속
 
 브라우저에서 [http://localhost:8080](http://localhost:8080) 으로 접속한 뒤 생성한 계정으로 로그인합니다.
 

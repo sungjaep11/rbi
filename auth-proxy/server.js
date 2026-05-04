@@ -4,11 +4,14 @@ const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
+const passport = require('passport');
+const { Strategy: GoogleStrategy } = require('passport-google-oauth20');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 const https = require('https');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -17,6 +20,9 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
+
+// Active WebSocket connections: sessionId -> socket
+const activeSockets = new Map();
 
 // ---------------------------------------------------------------------------
 // Helpers — users
@@ -45,6 +51,56 @@ function writeSessions(sessions) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers — webtop reset
+// ---------------------------------------------------------------------------
+
+function resetWebtop() {
+  exec('docker exec webtop rm -rf /config/.cache/sessions && docker restart webtop', (err) => {
+    if (err) console.error('[webtop] reset failed:', err.message);
+    else console.log('[webtop] session cleared and restarted');
+  });
+}
+
+// Clear webtop session cache without restarting the container.
+// Used on concurrent login kick: the new window can connect immediately
+// because we remove the stale KasmVNC session files without taking webtop offline.
+function clearWebtopSessionCache() {
+  exec('docker exec webtop rm -rf /config/.cache/sessions', (err) => {
+    if (err) console.error('[webtop] session cache clear failed:', err.message);
+    else console.log('[webtop] session cache cleared');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — session termination
+// ---------------------------------------------------------------------------
+
+// Mark sessions as terminated, close their WebSocket connections, and reset webtop.
+// Pass shouldResetWebtop=false on concurrent-login kick so webtop stays up but
+// the stale session cache is still wiped (new window connects without a bounce).
+function terminateSessionBatch(sessionIds, shouldResetWebtop = true) {
+  if (!sessionIds.length) return;
+  const sessions = readSessions();
+  for (const id of sessionIds) {
+    if (sessions[id]) sessions[id].terminated = true;
+    const sock = activeSockets.get(id);
+    if (sock) {
+      try { sock.destroy(); } catch (_) {}
+      activeSockets.delete(id);
+    }
+  }
+  writeSessions(sessions);
+  if (shouldResetWebtop) resetWebtop();
+  else clearWebtopSessionCache();
+}
+
+function removeSession(sessionId) {
+  const sessions = readSessions();
+  delete sessions[sessionId];
+  writeSessions(sessions);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers — User-Agent 파싱
 // ---------------------------------------------------------------------------
 
@@ -63,12 +119,12 @@ function parseUserAgent(ua) {
   if (versionMatch) browser = `${browser} ${versionMatch[2]}`;
 
   let device = '알 수 없음';
-  if (/Android/.test(ua))       device = 'Android';
-  else if (/iPhone/.test(ua))   device = 'iPhone';
-  else if (/iPad/.test(ua))     device = 'iPad';
-  else if (/Windows/.test(ua))  device = 'Windows';
+  if (/Android/.test(ua))        device = 'Android';
+  else if (/iPhone/.test(ua))    device = 'iPhone';
+  else if (/iPad/.test(ua))      device = 'iPad';
+  else if (/Windows/.test(ua))   device = 'Windows';
   else if (/Macintosh/.test(ua)) device = 'macOS';
-  else if (/Linux/.test(ua))    device = 'Linux';
+  else if (/Linux/.test(ua))     device = 'Linux';
 
   return { browser, device };
 }
@@ -121,12 +177,6 @@ function addSession(sessionId, username, ip, ua) {
   lookupLocation(ip, sessionId);
 }
 
-function removeSession(sessionId) {
-  const sessions = readSessions();
-  delete sessions[sessionId];
-  writeSessions(sessions);
-}
-
 // Throttle file writes: update lastActivity at most once per 30s per session
 const activityThrottles = new Map();
 function touchSession(sessionId) {
@@ -140,6 +190,62 @@ function touchSession(sessionId) {
     writeSessions(sessions);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Session monitor script (injected into webtop HTML)
+// Polls /api/session/info every 30s. On 401, shows overlay and redirects to /login.
+// ---------------------------------------------------------------------------
+
+const SESSION_MONITOR_SCRIPT = `
+<script>
+(function () {
+  var POLL_MS = 30000;
+  var shown = false;
+
+  function showOverlay(msg) {
+    if (shown) return;
+    shown = true;
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.88);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'font-family:sans-serif;color:#fff;gap:16px;pointer-events:all;';
+    el.innerHTML =
+      '<div style="font-size:20px;font-weight:600">&#9888;&#65039; ' + msg + '</div>' +
+      '<div style="font-size:13px;opacity:.65">3초 후 로그인 페이지로 이동합니다...</div>';
+    document.body.appendChild(el);
+    setTimeout(function () { window.location.replace('/login'); }, 3000);
+  }
+
+  function check() {
+    fetch('/api/session/info', { credentials: 'same-origin' })
+      .then(function (r) {
+        if (r.status === 401) showOverlay('세션이 종료되었습니다.');
+      })
+      .catch(function () {});
+  }
+
+  setInterval(check, POLL_MS);
+})();
+</script>
+`;
+
+// ---------------------------------------------------------------------------
+// Periodic cleanup — terminate expired sessions every minute
+// ---------------------------------------------------------------------------
+
+setInterval(() => {
+  const sessions = readSessions();
+  const now = Date.now();
+  const expired = Object.keys(sessions).filter(id =>
+    !sessions[id].terminated &&
+    sessions[id].expiresAt &&
+    new Date(sessions[id].expiresAt).getTime() < now
+  );
+  if (expired.length > 0) {
+    console.log(`[cleanup] terminating ${expired.length} expired session(s)`);
+    terminateSessionBatch(expired);
+  }
+}, 60_000);
 
 // ---------------------------------------------------------------------------
 // Middleware
@@ -160,12 +266,86 @@ const sessionMiddleware = session({
 });
 app.use(sessionMiddleware);
 
+app.use(passport.initialize());
+app.use(passport.session());
+
+passport.serializeUser((user, done) => done(null, user.username));
+passport.deserializeUser((username, done) => {
+  const user = readUsers().find(u => u.username === username);
+  done(null, user || false);
+});
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: '/auth/google/callback',
+  }, (accessToken, refreshToken, profile, done) => {
+    const email = profile.emails?.[0]?.value;
+    if (!email) return done(new Error('No email returned from Google'));
+
+    const users = readUsers();
+    let user = users.find(u => u.googleId === profile.id || u.username === email);
+
+    if (!user) {
+      user = {
+        username: email,
+        googleId: profile.id,
+        role: 'user',
+        createdAt: new Date().toISOString(),
+      };
+      users.push(user);
+      writeUsers(users);
+    } else if (!user.googleId) {
+      const idx = users.findIndex(u => u.username === user.username);
+      users[idx].googleId = profile.id;
+      user = users[idx];
+      writeUsers(users);
+    }
+
+    done(null, user);
+  }));
+}
+
 // Serve static assets (login.html, login.css) without auth
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------------------------------------------------------------------------
 // Auth routes (public)
 // ---------------------------------------------------------------------------
+
+app.get('/auth/google', (req, res, next) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.redirect('/login');
+  }
+  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+});
+
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/login?error=google' }),
+  (req, res) => {
+    const user = req.user;
+    const existingSessions = readSessions();
+    const toKick = Object.keys(existingSessions).filter(
+      id => !existingSessions[id].terminated && existingSessions[id].username === user.username
+    );
+    if (toKick.length > 0) terminateSessionBatch(toKick, false);
+
+    req.session.regenerate((err) => {
+      if (err) return res.redirect('/login');
+      req.session.user = { username: user.username, role: user.role };
+      req.session.expiresAt = new Date(Date.now() + SESSION_MAX_AGE).toISOString();
+      req.session.save(() => {
+        const clientIp = (req.ip || '').replace(/^::ffff:/, '');
+        addSession(req.session.id, user.username, clientIp, req.headers['user-agent']);
+        res.redirect('/');
+      });
+    });
+  }
+);
 
 app.get('/login', (req, res) => {
   if (req.session.user) return res.redirect('/');
@@ -182,8 +362,18 @@ app.post('/login', (req, res) => {
   const users = readUsers();
   const user = users.find(u => u.username === username);
 
-  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
+  if (!user || !user.passwordHash || !bcrypt.compareSync(password, user.passwordHash)) {
     return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  // Kick all existing active sessions for this user before creating a new one
+  const existingSessions = readSessions();
+  const toKick = Object.keys(existingSessions).filter(
+    id => !existingSessions[id].terminated && existingSessions[id].username === user.username
+  );
+  if (toKick.length > 0) {
+    console.log(`[login] kicking ${toKick.length} existing session(s) for "${user.username}"`);
+    terminateSessionBatch(toKick, false); // webtop은 재시작하지 않음 — 새 창이 이어서 사용
   }
 
   req.session.regenerate((err) => {
@@ -204,10 +394,7 @@ app.post('/logout', (req, res) => {
     res.clearCookie('connect.sid');
     removeSession(sessionId);
     res.redirect('/login');
-    exec('docker exec webtop rm -rf /config/.cache/sessions && docker restart webtop', (err) => {
-      if (err) console.error('[logout] failed to reset webtop:', err.message);
-      else console.log('[logout] webtop session cleared and restarted');
-    });
+    resetWebtop();
   });
 });
 
@@ -223,12 +410,24 @@ function requireAuth(req, res, next) {
     return res.redirect('/login');
   }
 
-  // Check if this session was remotely terminated
   const sessions = readSessions();
-  if (sessions[req.session.id]?.terminated) {
+  const s = sessions[req.session.id];
+
+  // Session was terminated (concurrent login or admin kick)
+  if (s?.terminated) {
     req.session.destroy(() => res.clearCookie('connect.sid'));
     if (req.headers['accept']?.includes('application/json')) {
       return res.status(401).json({ error: 'Session terminated' });
+    }
+    return res.redirect('/login');
+  }
+
+  // Session expired
+  if (s?.expiresAt && new Date(s.expiresAt).getTime() < Date.now()) {
+    terminateSessionBatch([req.session.id]);
+    req.session.destroy(() => res.clearCookie('connect.sid'));
+    if (req.headers['accept']?.includes('application/json')) {
+      return res.status(401).json({ error: 'Session expired' });
     }
     return res.redirect('/login');
   }
@@ -320,8 +519,7 @@ app.delete('/api/sessions/:sessionId', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  sessions[sessionId].terminated = true;
-  writeSessions(sessions);
+  terminateSessionBatch([sessionId]);
   res.json({ ok: true });
 });
 
@@ -329,16 +527,14 @@ app.delete('/api/sessions', requireAuth, (req, res) => {
   const { username, role } = req.session.user;
   const sessions = readSessions();
 
-  let count = 0;
-  for (const [id, s] of Object.entries(sessions)) {
-    if (id === req.session.id) continue;
-    if (role !== 'admin' && s.username !== username) continue;
-    sessions[id].terminated = true;
-    count++;
-  }
+  const toKick = Object.keys(sessions).filter(id =>
+    id !== req.session.id &&
+    !sessions[id].terminated &&
+    (role === 'admin' || sessions[id].username === username)
+  );
 
-  writeSessions(sessions);
-  res.json({ terminated: count });
+  if (toKick.length > 0) terminateSessionBatch(toKick);
+  res.json({ terminated: toKick.length });
 });
 
 // ---------------------------------------------------------------------------
@@ -372,7 +568,7 @@ app.patch('/api/me/password', requireAuth, (req, res) => {
 // Admin API — 사용자 관리
 // ---------------------------------------------------------------------------
 
-app.get('/admin/users', requireAuth, requireAdmin, (req, res) => {
+app.get('/admin/users', requireAuth, requireAdmin, (_req, res) => {
   const users = readUsers().map(({ username, role, createdAt }) => ({
     username, role, createdAt,
   }));
@@ -423,7 +619,7 @@ app.delete('/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Webtop reverse proxy (authenticated)
+// Webtop reverse proxy
 // ---------------------------------------------------------------------------
 
 const webtopProxy = createProxyMiddleware({
@@ -439,6 +635,110 @@ const webtopProxy = createProxyMiddleware({
       }
     },
   },
+});
+
+// Inject session monitor into the webtop index HTML
+const webtopTarget = new URL(WEBTOP_URL);
+
+const CONNECTING_PAGE = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>연결 중...</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f1117;color:#e2e8f0;font-family:'Segoe UI',sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    height:100vh;gap:20px;}
+  .spinner{width:44px;height:44px;border:4px solid rgba(255,255,255,.15);
+    border-top-color:#60a5fa;border-radius:50%;animation:spin .9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  h1{font-size:1.25rem;font-weight:600;letter-spacing:.01em;}
+  p{font-size:.85rem;opacity:.5;}
+</style>
+</head>
+<body>
+<div class="spinner"></div>
+<h1>데스크톱에 연결하는 중...</h1>
+<p id="msg">잠시 후 자동으로 연결됩니다.</p>
+<script>
+(function(){
+  var attempt = 0;
+  var INTERVAL = 2500;
+  function probe(){
+    attempt++;
+    fetch('/_rbi_ready_probe', {credentials:'same-origin'})
+      .then(function(r){ if(r.ok) window.location.reload(); })
+      .catch(function(){});
+    document.getElementById('msg').textContent =
+      '연결 시도 중... (' + attempt + ')';
+  }
+  setTimeout(probe, INTERVAL);
+  setInterval(probe, INTERVAL);
+})();
+</script>
+</body>
+</html>`;
+
+app.get('/_rbi_ready_probe', requireAuth, (_req, res) => {
+  const options = {
+    hostname: webtopTarget.hostname,
+    port: Number(webtopTarget.port) || 80,
+    path: '/',
+    headers: { host: webtopTarget.host },
+  };
+  const req2 = http.get(options, (proxyRes) => {
+    // Drain to avoid socket leak
+    proxyRes.resume();
+    const status = proxyRes.statusCode || 0;
+    if (status >= 200 && status < 300) {
+      res.json({ ready: true });
+    } else {
+      res.status(503).json({ ready: false, status });
+    }
+  });
+  req2.on('error', () => res.status(503).json({ ready: false, error: 'unreachable' }));
+  req2.setTimeout(3000, () => { req2.destroy(); res.status(503).json({ ready: false, error: 'timeout' }); });
+});
+
+app.get('/', requireAuth, (_req, res) => {
+  const options = {
+    hostname: webtopTarget.hostname,
+    port: Number(webtopTarget.port) || 80,
+    path: '/',
+    headers: { host: webtopTarget.host },
+  };
+  http.get(options, (proxyRes) => {
+    const status = proxyRes.statusCode || 0;
+
+    // webtop이 아직 준비되지 않았거나 자체 /login으로 리다이렉트하는 경우
+    // — 브라우저에 그대로 전달하면 로그인 화면으로 튕기므로 로딩 페이지로 대체
+    if (status < 200 || status >= 300) {
+      proxyRes.resume(); // drain
+      console.log(`[proxy] GET / webtop returned ${status} — serving connecting page`);
+      res.status(200).set('Content-Type', 'text/html; charset=utf-8').send(CONNECTING_PAGE);
+      return;
+    }
+
+    const chunks = [];
+    proxyRes.on('data', chunk => chunks.push(chunk));
+    proxyRes.on('end', () => {
+      let html = Buffer.concat(chunks).toString('utf8');
+      const tag = html.includes('</body>') ? '</body>' : '</html>';
+      html = html.replace(tag, SESSION_MONITOR_SCRIPT + tag);
+      const headers = { ...proxyRes.headers };
+      delete headers['content-encoding'];
+      delete headers['transfer-encoding'];
+      headers['content-length'] = String(Buffer.byteLength(html));
+      res.writeHead(200, headers);
+      res.end(html);
+    });
+  }).on('error', () => {
+    console.log('[proxy] GET / webtop unreachable — serving connecting page');
+    res.status(200).set('Content-Type', 'text/html; charset=utf-8').send(CONNECTING_PAGE);
+  });
 });
 
 app.use('/', requireAuth, webtopProxy);
@@ -461,12 +761,20 @@ server.on('upgrade', (req, socket, head) => {
         socket.destroy();
         return;
       }
+
       const sessions = readSessions();
-      if (sessions[req.session.id]?.terminated) {
+      const s = sessions[req.session.id];
+
+      if (s?.terminated || (s?.expiresAt && new Date(s.expiresAt).getTime() < Date.now())) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
       }
+
+      // Track this socket so we can close it on termination
+      activeSockets.set(req.session.id, socket);
+      socket.on('close', () => activeSockets.delete(req.session.id));
+
       webtopProxy.upgrade(req, socket, head);
     });
   });

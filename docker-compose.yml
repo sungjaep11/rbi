@@ -8,6 +8,8 @@ services:
       - WEBTOP_URL=http://webtop:3000
       - SESSION_SECRET=${SESSION_SECRET}
       - PORT=8080
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
     volumes:
       - ./auth-proxy/db:/app/db
       - /var/run/docker.sock:/var/run/docker.sock
