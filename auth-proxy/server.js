@@ -12,10 +12,12 @@ const fs = require('fs');
 const { exec } = require('child_process');
 const https = require('https');
 const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
+const PRINT_DIR = path.join(__dirname, 'print-output');
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
@@ -225,6 +227,56 @@ const SESSION_MONITOR_SCRIPT = `
   }
 
   setInterval(check, POLL_MS);
+})();
+</script>
+`;
+
+// ---------------------------------------------------------------------------
+// 인쇄 클라이언트 스크립트 (webtop HTML에 주입)
+// /print-ws로 연결하여 바이너리 PDF를 수신하고 브라우저 프린트 다이얼로그를 실행한다.
+// ---------------------------------------------------------------------------
+
+const PRINT_CLIENT_SCRIPT = `
+<script>
+(function () {
+  var RETRY_MS = 5000;
+  var ws;
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/print-ws');
+    ws.binaryType = 'blob';
+
+    ws.onopen = function () {
+      console.log('[print] connected');
+    };
+
+    ws.onmessage = function (e) {
+      if (!(e.data instanceof Blob)) return;
+      var blob = new Blob([e.data], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;width:0;height:0;border:none;visibility:hidden;';
+      document.body.appendChild(iframe);
+      iframe.onload = function () {
+        try { iframe.contentWindow.print(); } catch (err) {}
+        setTimeout(function () {
+          document.body.removeChild(iframe);
+          URL.revokeObjectURL(url);
+        }, 60000);
+      };
+      iframe.src = url;
+    };
+
+    ws.onclose = function () {
+      setTimeout(connect, RETRY_MS);
+    };
+    ws.onerror = function () {
+      ws.close();
+    };
+  }
+
+  connect();
 })();
 </script>
 `;
@@ -625,7 +677,6 @@ app.delete('/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
 const webtopProxy = createProxyMiddleware({
   target: WEBTOP_URL,
   changeOrigin: true,
-  ws: true,
   on: {
     error: (err, _req, res) => {
       console.error('[proxy error]', err.message);
@@ -727,7 +778,7 @@ app.get('/', requireAuth, (_req, res) => {
     proxyRes.on('end', () => {
       let html = Buffer.concat(chunks).toString('utf8');
       const tag = html.includes('</body>') ? '</body>' : '</html>';
-      html = html.replace(tag, SESSION_MONITOR_SCRIPT + tag);
+      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + tag);
       const headers = { ...proxyRes.headers };
       delete headers['content-encoding'];
       delete headers['transfer-encoding'];
@@ -752,6 +803,36 @@ const server = app.listen(PORT, () => {
   console.log(`proxying to webtop at ${WEBTOP_URL}`);
 });
 
+// ---------------------------------------------------------------------------
+// 인쇄 WebSocket 서버 + 파일 감시
+// ---------------------------------------------------------------------------
+
+const printWss = new WebSocket.Server({ noServer: true });
+
+fs.mkdirSync(PRINT_DIR, { recursive: true });
+
+setInterval(() => {
+  let files;
+  try {
+    files = fs.readdirSync(PRINT_DIR).filter(f => f.toLowerCase().endsWith('.pdf'));
+  } catch { return; }
+  console.log(`[print] poll: ${files.length} file(s), ${printWss.clients.size} client(s)`);
+  if (!files.length || !printWss.clients.size) return;
+  for (const fname of files) {
+    const fpath = path.join(PRINT_DIR, fname);
+    try {
+      const data = fs.readFileSync(fpath);
+      for (const client of printWss.clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(data);
+      }
+      fs.unlinkSync(fpath);
+      console.log(`[print] sent ${fname} to ${printWss.clients.size} client(s), deleted`);
+    } catch (e) {
+      console.error(`[print] error processing ${fname}:`, e.message);
+    }
+  }
+}, 3000);
+
 // Forward WebSocket upgrades to webtop
 server.on('upgrade', (req, socket, head) => {
   cookieParser()(req, {}, () => {
@@ -768,6 +849,14 @@ server.on('upgrade', (req, socket, head) => {
       if (s?.terminated || (s?.expiresAt && new Date(s.expiresAt).getTime() < Date.now())) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
+        return;
+      }
+
+      // /print-ws → printWss (직접 처리)
+      if (req.url === '/print-ws') {
+        printWss.handleUpgrade(req, socket, head, (ws) => {
+          printWss.emit('connection', ws, req);
+        });
         return;
       }
 
