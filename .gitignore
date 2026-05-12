@@ -1,3 +1,6 @@
+# Build artifacts
+static-web/
+
 # Environment
 .env
 
