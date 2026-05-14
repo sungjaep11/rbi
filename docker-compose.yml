@@ -8,8 +8,11 @@ services:
       - WEBTOP_URL=http://webtop:3000
       - SESSION_SECRET=${SESSION_SECRET}
       - PORT=8080
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
     volumes:
       - ./auth-proxy/db:/app/db
+      - ./print-output:/app/print-output
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - webtop
@@ -24,6 +27,7 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - webtop-config:/config
+      - ./static-web/selkies-dashboard:/usr/share/selkies/selkies-dashboard
     # NOT exposed to host — only accessible through auth-proxy
     restart: unless-stopped
 

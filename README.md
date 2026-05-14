@@ -44,7 +44,20 @@ $secret = [System.Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random 
 SESSION_SECRET=여기에_랜덤한_긴_문자열_입력
 ```
 
-### 3. 컨테이너 빌드 및 실행
+### 3. 대시보드 빌드
+
+`static-web/`은 빌드 결과물이므로 저장소에 포함되어 있지 않습니다. Docker 실행 전에 직접 빌드해야 합니다.
+
+```bash
+cd selkies/addons/selkies-dashboard
+npm install
+npm run deploy
+cd ../../..
+```
+
+`npm run deploy`는 Vite로 번들을 생성한 뒤 결과물을 `static-web/selkies-dashboard/`로 자동 복사합니다.
+
+### 4. 컨테이너 빌드 및 실행
 
 ```bash
 docker-compose up --build -d
@@ -52,7 +65,7 @@ docker-compose up --build -d
 
 처음 실행 시 WebTop 이미지를 다운로드하므로 시간이 걸릴 수 있습니다.
 
-### 4. 관리자 계정 생성
+### 5. 관리자 계정 생성
 
 컨테이너가 실행된 후 관리자 계정을 생성합니다.
 
@@ -66,7 +79,7 @@ docker exec auth-proxy node scripts/create-admin.js <사용자명> <비밀번호
 docker exec auth-proxy node scripts/create-admin.js admin mypassword admin
 ```
 
-### 5. 접속
+### 6. 접속
 
 브라우저에서 [http://localhost:8080](http://localhost:8080) 으로 접속한 뒤 생성한 계정으로 로그인합니다.
 
@@ -94,30 +107,60 @@ docker-compose down -v
 rbi/
 ├── .env                        # 환경 변수 (SESSION_SECRET)
 ├── docker-compose.yml          # Docker 서비스 구성
-└── auth-proxy/
-    ├── Dockerfile              # auth-proxy 컨테이너 이미지
-    ├── package.json            # Node.js 의존성
-    ├── server.js               # Express 서버 (메인 진입점)
-    ├── public/
-    │   ├── login.html          # 로그인 페이지
-    │   └── login.css           # 로그인 페이지 스타일
-    ├── scripts/
-    │   └── create-admin.js     # 사용자 생성 CLI 스크립트
-    └── db/
-        └── users.json          # JSON 기반 사용자 데이터베이스
+├── auth-proxy/
+│   ├── Dockerfile              # auth-proxy 컨테이너 이미지
+│   ├── package.json            # Node.js 의존성
+│   ├── server.js               # Express 서버 (메인 진입점)
+│   ├── public/
+│   │   ├── login.html          # 로그인 페이지
+│   │   └── login.css           # 로그인 페이지 스타일
+│   ├── scripts/
+│   │   └── create-admin.js     # 사용자 생성 CLI 스크립트
+│   └── db/
+│       ├── users.json          # JSON 기반 사용자 데이터베이스
+│       └── sessions.json       # 활성 세션 목록
+├── static-web/
+│   └── selkies-dashboard/      # 대시보드 빌드 결과물 (npm run deploy로 생성)
+└── selkies/
+    └── addons/
+        └── selkies-dashboard/  # 대시보드 소스코드 (React/Vite)
 ```
 
 ## API 엔드포인트
 
-| 메서드 | 경로 | 설명 | 권한 |
-|--------|------|------|------|
-| GET | `/login` | 로그인 페이지 | 없음 |
-| POST | `/login` | 로그인 처리 | 없음 |
-| POST | `/logout` | 로그아웃 | 없음 |
-| GET | `/*` | WebTop 프록시 | 로그인 필요 |
-| GET | `/admin/users` | 사용자 목록 조회 | 관리자 |
-| POST | `/admin/users` | 사용자 생성 | 관리자 |
-| DELETE | `/admin/users/:username` | 사용자 삭제 | 관리자 |
+### 인증 (공개)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/login` | 로그인 페이지 |
+| POST | `/login` | 로그인 처리 |
+| POST | `/logout` | 로그아웃 및 WebTop 세션 초기화 |
+
+### 사용자 API (로그인 필요)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/me` | 현재 로그인 사용자 정보 조회 |
+| PATCH | `/api/me/password` | 비밀번호 변경 |
+| GET | `/api/session/info` | 현재 세션 만료 시간 조회 |
+| POST | `/api/session/extend` | 세션 만료 시간 연장 (+8시간) |
+| GET | `/api/sessions` | 활성 세션 목록 (관리자: 전체, 일반 사용자: 본인 것만) |
+| DELETE | `/api/sessions/:sessionId` | 특정 세션 강제 종료 |
+| DELETE | `/api/sessions` | 현재 세션 제외 전체 세션 강제 종료 |
+
+### 관리자 API (관리자 권한 필요)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/admin/users` | 사용자 목록 조회 |
+| POST | `/admin/users` | 사용자 생성 |
+| DELETE | `/admin/users/:username` | 사용자 삭제 |
+
+### WebTop 프록시
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| ALL | `/*` | WebTop으로 리버스 프록시 (로그인 필요, WebSocket 지원) |
 
 ## 환경 변수
 
@@ -133,11 +176,3 @@ rbi/
 - 세션 쿠키: `httpOnly`, `sameSite=lax`, 8시간 만료
 - 로그인 시 세션 재생성 (세션 고정 공격 방지)
 - WebTop 컨테이너는 외부에 직접 노출되지 않음
-
-## Docker 없이 로컬 실행 (개발용)
-
-```bash
-cd auth-proxy
-npm install
-SESSION_SECRET=dev-secret PORT=8080 WEBTOP_URL=http://localhost:3000 npm start
-```
