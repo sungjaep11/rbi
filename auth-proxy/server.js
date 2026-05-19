@@ -17,8 +17,9 @@ const WebSocket = require('ws');
 const app = express();
 const PORT = process.env.PORT || 8080;
 const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
-const PRINT_DIR = path.join(__dirname, 'print-output');
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
+const webtopHost = new URL(WEBTOP_URL).hostname;
+const WEBTOP_PRINT_WS = `ws://${webtopHost}:7777/ws`;
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
@@ -103,7 +104,7 @@ function removeSession(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — User-Agent 파싱
+// 헬퍼 — User-Agent 파싱
 // ---------------------------------------------------------------------------
 
 function parseUserAgent(ua) {
@@ -132,7 +133,7 @@ function parseUserAgent(ua) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — IP 위치 조회 (비동기, 로그인 차단 없음)
+// 헬퍼 — IP 위치 조회 (비동기, 로그인 차단 없음)
 // ---------------------------------------------------------------------------
 
 const PRIVATE_IP_RE = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$)/;
@@ -617,7 +618,7 @@ app.patch('/api/me/password', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin API — 사용자 관리
+// 관리자 API — 사용자 관리
 // ---------------------------------------------------------------------------
 
 app.get('/admin/users', requireAuth, requireAdmin, (_req, res) => {
@@ -804,34 +805,11 @@ const server = app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------------------------
-// 인쇄 WebSocket 서버 + 파일 감시
+// 인쇄 WebSocket 프록시 — /print-ws 연결을 webtop 내부 서버로 중계
 // ---------------------------------------------------------------------------
 
-const printWss = new WebSocket.Server({ noServer: true });
-
-fs.mkdirSync(PRINT_DIR, { recursive: true });
-
-setInterval(() => {
-  let files;
-  try {
-    files = fs.readdirSync(PRINT_DIR).filter(f => f.toLowerCase().endsWith('.pdf'));
-  } catch { return; }
-  console.log(`[print] poll: ${files.length} file(s), ${printWss.clients.size} client(s)`);
-  if (!files.length || !printWss.clients.size) return;
-  for (const fname of files) {
-    const fpath = path.join(PRINT_DIR, fname);
-    try {
-      const data = fs.readFileSync(fpath);
-      for (const client of printWss.clients) {
-        if (client.readyState === WebSocket.OPEN) client.send(data);
-      }
-      fs.unlinkSync(fpath);
-      console.log(`[print] sent ${fname} to ${printWss.clients.size} client(s), deleted`);
-    } catch (e) {
-      console.error(`[print] error processing ${fname}:`, e.message);
-    }
-  }
-}, 3000);
+// handleUpgrade 전용 서버 인스턴스 (클라이언트를 직접 관리하지 않음)
+const printUpgrader = new WebSocket.Server({ noServer: true });
 
 // Forward WebSocket upgrades to webtop
 server.on('upgrade', (req, socket, head) => {
@@ -852,10 +830,29 @@ server.on('upgrade', (req, socket, head) => {
         return;
       }
 
-      // /print-ws → printWss (직접 처리)
+      // /print-ws → webtop 내부 print_server.py로 프록시
       if (req.url === '/print-ws') {
-        printWss.handleUpgrade(req, socket, head, (ws) => {
-          printWss.emit('connection', ws, req);
+        const upstream = new WebSocket(WEBTOP_PRINT_WS);
+        upstream.once('open', () => {
+          printUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
+            browserWs.on('message', (data, isBinary) => {
+              if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+            });
+            upstream.on('message', (data, isBinary) => {
+              if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
+            });
+            upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
+            browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
+            upstream.on('error', err => {
+              console.error('[print-proxy] upstream error:', err.message);
+              try { browserWs.close(1011); } catch (_) {}
+            });
+          });
+        });
+        upstream.once('error', (err) => {
+          console.error('[print-proxy] cannot connect to webtop print server:', err.message);
+          socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+          socket.destroy();
         });
         return;
       }

@@ -41,19 +41,22 @@ auth-proxy가 webtop HTML을 가로채 스크립트를 주입하는 기존 방�
 
 단계 1~2(CUPS) 없이도 전송 흐름을 검증할 수 있도록 placeholder로 구현했다. `print-output/` 폴더에 PDF를 복사하면 브라우저 프린트 다이얼로그까지 테스트할 수 있다.
 
-- `auth-proxy/package.json`: `ws` 패키지 추가
-- `auth-proxy/server.js`: `printWss` WebSocket 서버 추가, 3초마다 `print-output/` 폴링하여 PDF 발견 시 바이너리 전송, `upgrade` 핸들러에 `/print-ws` 분기 추가, webtop HTML에 `PRINT_CLIENT_SCRIPT` 주입
-- `docker-compose.yml`: `auth-proxy`에 `./print-output:/app/print-output` bind mount 추가
+- `webtop/Dockerfile`: linuxserver/webtop을 기반으로 Python3, aiohttp, curl, cups, cups-pdf 설치
+- `webtop/print_server.py`: aiohttp 기반 내부 서버. `GET /ws`로 브라우저 WebSocket 연결을 받고, `POST /print`로 CUPS 스크립트에서 PDF를 수신하여 모든 연결된 브라우저로 전송
+- `webtop/print-forwarder.sh`: CUPS `PostProcessingCommand`로 등록할 스크립트. PDF 파일 경로를 받아 `POST /print`로 전달
+- `webtop/custom-services.d/print-server/run`: s6-overlay 서비스로 print_server.py를 자동 실행
+- `auth-proxy/server.js`: `/print-ws` WebSocket 연결을 `ws://webtop:7777/ws`로 프록시. 파일 폴링 로직 제거
+- `docker-compose.yml`: webtop을 `build: ./webtop`으로 변경, `print-output` shared volume 제거
 
 ### 테스트 방법
 
 ```bash
 docker compose up --build
 # 브라우저에서 http://localhost:8080 로그인 후
-cp 파일.pdf ./print-output/
-# 3초 이내에 브라우저 프린트 다이얼로그 팝업
+docker exec webtop curl -sf -X POST --data-binary @/path/to/file.pdf http://localhost:7777/print
+# 브라우저 프린트 다이얼로그 팝업
 ```
 
 ### 남은 작업
 
-단계 1~2가 완성되면 webtop이 CUPS로 PDF를 `print-output/`에 생성하도록 연결하고, 해당 볼륨을 webtop과 auth-proxy가 공유하도록 docker-compose를 수정한다.
+단계 1~2(CUPS 설정)가 완성되면 `/etc/cups/cups-pdf.conf`에 `PostProcessingCommand /usr/local/bin/print-forwarder %F`를 추가하고, webtop 앱에서 직접 인쇄하면 print-forwarder → print_server → WebSocket 경로로 전달된다.
