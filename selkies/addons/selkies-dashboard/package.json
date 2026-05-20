@@ -7,7 +7,7 @@
     "dev": "vite",
     "serve": "vite",
     "build": "vite build",
-    "deploy": "vite build && cp -r dist/. ../../../static-web/selkies-dashboard/",
+    "deploy": "vite build --outDir ../../../static-web/selkies-dashboard --emptyOutDir",
     "lint": "eslint .",
     "preview": "vite preview"
   },
