@@ -39,24 +39,37 @@ auth-proxy가 webtop HTML을 가로채 스크립트를 주입하는 기존 방�
 
 ## 구현 현황
 
-단계 1~2(CUPS) 없이도 전송 흐름을 검증할 수 있도록 placeholder로 구현했다. `print-output/` 폴더에 PDF를 복사하면 브라우저 프린트 다이얼로그까지 테스트할 수 있다.
+단계 1~5 모두 구현 완료. webtop 앱의 인쇄 메뉴에서 곧바로 PDF 프린터로 출력하면 print-forwarder → print_server → WebSocket → 브라우저 다이얼로그까지 자동 연결된다.
 
-- `webtop/Dockerfile`: linuxserver/webtop을 기반으로 Python3, aiohttp, curl, cups, cups-pdf 설치
-- `webtop/print_server.py`: aiohttp 기반 내부 서버. `GET /ws`로 브라우저 WebSocket 연결을 받고, `POST /print`로 CUPS 스크립트에서 PDF를 수신하여 모든 연결된 브라우저로 전송
-- `webtop/print-forwarder.sh`: CUPS `PostProcessingCommand`로 등록할 스크립트. PDF 파일 경로를 받아 `POST /print`로 전달
+- `webtop/Dockerfile`: linuxserver/webtop을 기반으로 Python3, aiohttp, curl, cups, cups-pdf, cups-client 설치. `cupsd.conf`는 sed로 `Port 631 → Listen localhost:631`, `WebInterface Yes → No`만 in-place 패치하여 외부 노출/웹 UI 차단. `cups-pdf.conf` 끝에 `PostProcessing` 훅 등 RBI override append. cupsd/print-server를 s6-overlay 서비스로 등록
+- `webtop/custom-services.d/cupsd/run`: cupsd longrun 진입점. 최초 1회 cupsd를 띄워 `lpadmin -p PDF -v cups-pdf:/ -d PDF`로 PDF 가상 프린터를 기본 프린터로 등록한 뒤 `cupsd -f`로 재기동
+- `webtop/print_server.py`: aiohttp 기반 내부 서버. `GET /ws`로 브라우저 WebSocket 연결을 받고, `POST /print`로 PDF를 수신하여 모든 연결된 브라우저로 전송
+- `webtop/print-forwarder.sh`: cups-pdf의 `PostProcessing`이 호출. PDF를 `POST /print`로 전달하고 성공 시 임시 파일 삭제
 - `webtop/custom-services.d/print-server/run`: s6-overlay 서비스로 print_server.py를 자동 실행
-- `auth-proxy/server.js`: `/print-ws` WebSocket 연결을 `ws://webtop:7777/ws`로 프록시. 파일 폴링 로직 제거
-- `docker-compose.yml`: webtop을 `build: ./webtop`으로 변경, `print-output` shared volume 제거
+- `auth-proxy/server.js`: `/print-ws` WebSocket 연결을 `ws://webtop:7777/ws`로 프록시. 인증 미들웨어로 세션 검증
+- `docker-compose.yml`: webtop을 `build: ./webtop`으로 변경
 
 ### 테스트 방법
 
+end-to-end (실제 인쇄 흐름):
+
 ```bash
 docker compose up --build
-# 브라우저에서 http://localhost:8080 로그인 후
-docker exec webtop curl -sf -X POST --data-binary @/path/to/file.pdf http://localhost:7777/print
-# 브라우저 프린트 다이얼로그 팝업
+# 브라우저에서 http://localhost:8080 로그인
+# webtop 안에서 임의의 앱(예: 텍스트 에디터, 브라우저) 인쇄 → "PDF" 프린터 선택 (기본값)
+# → 로컬 브라우저의 프린트 다이얼로그가 자동으로 뜸
 ```
 
-### 남은 작업
+CUPS를 거치지 않고 파이프만 점검하려면:
 
-단계 1~2(CUPS 설정)가 완성되면 `/etc/cups/cups-pdf.conf`에 `PostProcessingCommand /usr/local/bin/print-forwarder %F`를 추가하고, webtop 앱에서 직접 인쇄하면 print-forwarder → print_server → WebSocket 경로로 전달된다.
+```bash
+docker exec webtop curl -sf -X POST --data-binary @/path/to/file.pdf http://localhost:7777/print
+```
+
+CUPS 상태 확인:
+
+```bash
+docker exec webtop lpstat -t            # 프린터/큐 상태
+docker exec webtop lpstat -d            # 기본 프린터 확인 (system default destination: PDF)
+docker exec webtop cat /etc/cups/cups-pdf.conf | tail -10  # 후처리 훅 확인
+```

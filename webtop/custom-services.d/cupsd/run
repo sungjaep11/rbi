@@ -1,0 +1,41 @@
+#!/bin/bash
+# cupsd longrun 진입점. 최초 1회 PDF 가상 프린터를 기본 프린터로 등록한다.
+
+REGISTERED_FLAG=/etc/cups/.pdf-registered
+
+if [ ! -f "$REGISTERED_FLAG" ]; then
+    /usr/sbin/cupsd
+
+    # cupsd가 IPC 요청을 받을 준비될 때까지 최대 10초 대기
+    for _ in $(seq 1 50); do
+        lpstat -r 2>/dev/null | grep -q running && break
+        sleep 0.2
+    done
+
+    # cups-pdf PPD 경로는 배포판/버전마다 다르므로 탐색
+    PPD=$(find /usr/share -name 'CUPS-PDF*.ppd' 2>/dev/null | head -n1)
+    if [ -n "$PPD" ]; then
+        PPD_ARGS=(-P "$PPD")
+    else
+        PPD_ARGS=(-m drv:///sample.drv/generic.ppd)
+    fi
+
+    if lpadmin -p PDF -v cups-pdf:/ -E "${PPD_ARGS[@]}" -D "Virtual PDF Printer" \
+        && lpadmin -d PDF \
+        && cupsenable PDF \
+        && cupsaccept PDF; then
+        touch "$REGISTERED_FLAG"
+        echo "[svc-cupsd] PDF printer registered as default" >&2
+    else
+        echo "[svc-cupsd] WARNING: failed to register PDF printer" >&2
+    fi
+
+    # 백그라운드 cupsd 종료 후 foreground로 재기동 (s6 supervision)
+    pkill -TERM cupsd 2>/dev/null
+    for _ in $(seq 1 25); do
+        pgrep -x cupsd >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+fi
+
+exec /usr/sbin/cupsd -f
