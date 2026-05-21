@@ -1,0 +1,75 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+version: "3.9"
+services:
+  dist:
+    image: selkies-py-build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYPI_PACKAGE: selkies
+        PACKAGE_VERSION: 0.0.0.dev0
+  web:
+    image: selkies-web-core
+    build:
+      context: ./addons/selkies-web-core
+      dockerfile: Dockerfile
+  test:
+    ###
+    # NOTE: export the DISTRIB_IMAGE and DISTRIB_RELEASE environment variables to change the base image during build and run.
+    ###
+
+    image: selkies-example:latest-${DISTRIB_IMAGE:-ubuntu}${DISTRIB_RELEASE:-24.04}
+    entrypoint: ["/tini", "--", "/bin/bash"]
+    build:
+      context: ./addons/example
+      dockerfile: Dockerfile
+      args:
+        DISTRIB_IMAGE: ${DISTRIB_IMAGE:-ubuntu}
+        DISTRIB_RELEASE: ${DISTRIB_RELEASE:-24.04}
+
+        PY_BUILD_IMAGE: selkies-py-build:latest
+        WEB_IMAGE: selkies-web-core:latest
+        PYPI_PACKAGE: selkies
+        PACKAGE_VERSION: 0.0.0.dev0
+    environment:
+      # Basic authentication
+      SELKIES_ENABLE_BASIC_AUTH: ${SELKIES_ENABLE_BASIC_AUTH}
+      SELKIES_BASIC_AUTH_USER: ${SELKIES_BASIC_AUTH_USER}
+      SELKIES_BASIC_AUTH_PASSWORD: ${SELKIES_BASIC_AUTH_PASSWORD}
+
+      # TURN with shared secret or user/pass
+      SELKIES_TURN_SHARED_SECRET: ${SELKIES_TURN_SHARED_SECRET}
+      SELKIES_TURN_HOST: ${SELKIES_TURN_HOST}
+      SELKIES_TURN_PORT: ${SELKIES_TURN_PORT}
+      SELKIES_TURN_USERNAME: ${SELKIES_TURN_USERNAME}
+      SELKIES_TURN_PASSWORD: ${SELKIES_TURN_PASSWORD}
+
+      # Turn with coTURN web
+      SELKIES_TURN_REST_URI: ${SELKIES_TURN_REST_URI}
+      SELKIES_TURN_REST_USERNAME: ${SELKIES_TURN_REST_USERNAME}
+      SELKIES_TURN_REST_AUTHHEADER: ${SELKIES_TURN_REST_AUTHHEADER}
+
+      # Additional server-side settings.
+      SELKIES_ENABLE_RESIZE: ${SELKIES_ENABLE_RESIZE}
+
+      # DEBUG remote cursors
+      SELKIES_DEBUG_CURSORS: ${SELKIES_DEBUG_CURSORS:-false}
+
+      # Start full XFCE4 session, vs just X11 server.
+      START_XFCE4: ${START_XFCE4:-true}
+    ports:
+      - "8080:8080"
+    volumes:
+      - type: bind
+        source: ./src/selkies
+        # Change Python version to system version
+        target: /usr/local/lib/python3.12/dist-packages/selkies
+        read_only: true
+
+    # Configure for interactive session
+    stdin_open: true
+    tty: true

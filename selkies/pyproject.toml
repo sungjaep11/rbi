@@ -1,0 +1,66 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "selkies"
+version = "0.0.0"
+authors = [
+    {name = "Dan Isla", email = "danisla@users.noreply.github.com"},
+    {name = "Seungmin Kim", email = "8457324+ehfd@users.noreply.github.com"},
+    {name = "Ryan Kuba", email = "ryankuba@gmail.com"},
+]
+description = "Open-Source Low-Latency Linux WebRTC HTML5 Remote Desktop and 3D Graphics / Game Streaming Platform with GStreamer"
+readme = "README.md"
+license = "MPL-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "websockets>=13.0",
+    "gputil",
+    "prometheus_client",
+    "msgpack",
+    "pynput",
+    "psutil",
+    "watchdog",
+    "Pillow",
+    "python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip",
+    "pixelflux",
+    "pcmflux",
+    "xkbcommon",
+    "distro",
+    # PulseAudio Microphone
+    "pulsectl",
+    "pasimple",
+    # WebRTC
+    "aioice>=0.10.1,<1.0.0",
+    "av",
+    "cffi>=1.0.0",
+    "cryptography>=44.0.0",
+    "google-crc32c>=1.1",
+    "pyee>=13.0.0",
+    "pylibsrtp>=0.10.0",
+    "pyopenssl>=25.0.0",
+    "aiohttp>=3.7.0",
+    "aiofiles>=25.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/selkies-project/selkies"
+"Bug Tracker" = "https://github.com/selkies-project/selkies/issues"
+
+[project.scripts]
+selkies = "selkies.__main__:main"
+selkies-resize = "selkies.display_utils:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["src"]
