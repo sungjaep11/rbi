@@ -7,6 +7,9 @@ static-web/
 # User database (contains hashed passwords)
 auth-proxy/db/users.json
 
+# Runtime session state
+auth-proxy/db/sessions.json
+
 # Node
 auth-proxy/node_modules/
 
