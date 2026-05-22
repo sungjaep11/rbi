@@ -1,0 +1,11 @@
+# 기본은 자동 감지에 맡기되, 컨테이너 내부에서 실행되는 스크립트/설정은 무조건 LF 고정
+# (Windows에서 체크아웃해도 core.autocrlf 영향 안 받게 함)
+* text=auto
+
+*.sh         text eol=lf
+*.py         text eol=lf
+*.conf       text eol=lf
+Dockerfile   text eol=lf
+
+# s6-overlay run 스크립트 (확장자 없음)
+**/custom-services.d/**/run  text eol=lf

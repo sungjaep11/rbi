@@ -12,11 +12,14 @@ const fs = require('fs');
 const { exec } = require('child_process');
 const https = require('https');
 const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
+const webtopHost = new URL(WEBTOP_URL).hostname;
+const WEBTOP_PRINT_WS = `ws://${webtopHost}:7777/ws`;
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
@@ -101,7 +104,7 @@ function removeSession(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — User-Agent 파싱
+// 헬퍼 — User-Agent 파싱
 // ---------------------------------------------------------------------------
 
 function parseUserAgent(ua) {
@@ -130,7 +133,7 @@ function parseUserAgent(ua) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — IP 위치 조회 (비동기, 로그인 차단 없음)
+// 헬퍼 — IP 위치 조회 (비동기, 로그인 차단 없음)
 // ---------------------------------------------------------------------------
 
 const PRIVATE_IP_RE = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$)/;
@@ -225,6 +228,56 @@ const SESSION_MONITOR_SCRIPT = `
   }
 
   setInterval(check, POLL_MS);
+})();
+</script>
+`;
+
+// ---------------------------------------------------------------------------
+// 인쇄 클라이언트 스크립트 (webtop HTML에 주입)
+// /print-ws로 연결하여 바이너리 PDF를 수신하고 브라우저 프린트 다이얼로그를 실행한다.
+// ---------------------------------------------------------------------------
+
+const PRINT_CLIENT_SCRIPT = `
+<script>
+(function () {
+  var RETRY_MS = 5000;
+  var ws;
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/print-ws');
+    ws.binaryType = 'blob';
+
+    ws.onopen = function () {
+      console.log('[print] connected');
+    };
+
+    ws.onmessage = function (e) {
+      if (!(e.data instanceof Blob)) return;
+      var blob = new Blob([e.data], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;width:0;height:0;border:none;visibility:hidden;';
+      document.body.appendChild(iframe);
+      iframe.onload = function () {
+        try { iframe.contentWindow.print(); } catch (err) {}
+        setTimeout(function () {
+          document.body.removeChild(iframe);
+          URL.revokeObjectURL(url);
+        }, 60000);
+      };
+      iframe.src = url;
+    };
+
+    ws.onclose = function () {
+      setTimeout(connect, RETRY_MS);
+    };
+    ws.onerror = function () {
+      ws.close();
+    };
+  }
+
+  connect();
 })();
 </script>
 `;
@@ -565,7 +618,7 @@ app.patch('/api/me/password', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin API — 사용자 관리
+// 관리자 API — 사용자 관리
 // ---------------------------------------------------------------------------
 
 app.get('/admin/users', requireAuth, requireAdmin, (_req, res) => {
@@ -625,7 +678,6 @@ app.delete('/admin/users/:username', requireAuth, requireAdmin, (req, res) => {
 const webtopProxy = createProxyMiddleware({
   target: WEBTOP_URL,
   changeOrigin: true,
-  ws: true,
   on: {
     error: (err, _req, res) => {
       console.error('[proxy error]', err.message);
@@ -727,7 +779,7 @@ app.get('/', requireAuth, (_req, res) => {
     proxyRes.on('end', () => {
       let html = Buffer.concat(chunks).toString('utf8');
       const tag = html.includes('</body>') ? '</body>' : '</html>';
-      html = html.replace(tag, SESSION_MONITOR_SCRIPT + tag);
+      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + tag);
       const headers = { ...proxyRes.headers };
       delete headers['content-encoding'];
       delete headers['transfer-encoding'];
@@ -752,6 +804,13 @@ const server = app.listen(PORT, () => {
   console.log(`proxying to webtop at ${WEBTOP_URL}`);
 });
 
+// ---------------------------------------------------------------------------
+// 인쇄 WebSocket 프록시 — /print-ws 연결을 webtop 내부 서버로 중계
+// ---------------------------------------------------------------------------
+
+// handleUpgrade 전용 서버 인스턴스 (클라이언트를 직접 관리하지 않음)
+const printUpgrader = new WebSocket.Server({ noServer: true });
+
 // Forward WebSocket upgrades to webtop
 server.on('upgrade', (req, socket, head) => {
   cookieParser()(req, {}, () => {
@@ -768,6 +827,33 @@ server.on('upgrade', (req, socket, head) => {
       if (s?.terminated || (s?.expiresAt && new Date(s.expiresAt).getTime() < Date.now())) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
+        return;
+      }
+
+      // /print-ws → webtop 내부 print_server.py로 프록시
+      if (req.url === '/print-ws') {
+        const upstream = new WebSocket(WEBTOP_PRINT_WS);
+        upstream.once('open', () => {
+          printUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
+            browserWs.on('message', (data, isBinary) => {
+              if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+            });
+            upstream.on('message', (data, isBinary) => {
+              if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
+            });
+            upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
+            browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
+            upstream.on('error', err => {
+              console.error('[print-proxy] upstream error:', err.message);
+              try { browserWs.close(1011); } catch (_) {}
+            });
+          });
+        });
+        upstream.once('error', (err) => {
+          console.error('[print-proxy] cannot connect to webtop print server:', err.message);
+          socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+          socket.destroy();
+        });
         return;
       }
 

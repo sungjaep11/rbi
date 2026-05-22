@@ -283,6 +283,105 @@
     "startTime": "2026-05-04T06:35:17.219Z",
     "lastActivity": "2026-05-04T06:35:17.260Z",
     "expiresAt": "2026-05-04T14:35:17.219Z",
+    "terminated": true
+  },
+  "bfHkdHFjUSw7PVUVs4RewUkZJwvwG68a": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-12T15:00:59.546Z",
+    "lastActivity": "2026-05-12T15:05:50.361Z",
+    "expiresAt": "2026-05-12T23:00:59.546Z",
+    "terminated": true
+  },
+  "ZfoRls63kGNUTkMb6P6KCY3ePrfQSUFa": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-12T15:08:12.786Z",
+    "lastActivity": "2026-05-12T15:08:42.887Z",
+    "expiresAt": "2026-05-12T23:08:12.786Z",
+    "terminated": true
+  },
+  "COKnLEpKVW_-nildHT--pYtIEvnd9mNe": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-12T15:11:22.526Z",
+    "lastActivity": "2026-05-12T15:13:53.335Z",
+    "expiresAt": "2026-05-12T23:11:22.526Z",
+    "terminated": true
+  },
+  "y_Bjh_ZPqMmnByJguJcGYrZXUdQcdrKp": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-12T15:27:52.258Z",
+    "lastActivity": "2026-05-12T15:28:53.325Z",
+    "expiresAt": "2026-05-12T23:27:52.258Z",
+    "terminated": true
+  },
+  "EAVBk3mbVjBcdGLFOnsqzundADnja5o8": {
+    "username": "jakejsp11@gmail.com",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-13T13:48:13.659Z",
+    "lastActivity": "2026-05-13T13:49:42.425Z",
+    "expiresAt": "2026-05-13T21:48:13.659Z",
+    "terminated": true
+  },
+  "SRnbaPbK9m-kR4fRKHwbYfCWI2Ibjgbb": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-19T15:07:17.601Z",
+    "lastActivity": "2026-05-19T15:13:35.136Z",
+    "expiresAt": "2026-05-19T23:07:17.601Z",
+    "terminated": true
+  },
+  "mQWWZQVpQ39hyvfhbXpg2wYumcMrzv_k": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-19T15:24:27.129Z",
+    "lastActivity": "2026-05-19T15:49:35.027Z",
+    "expiresAt": "2026-05-19T23:24:27.129Z",
+    "terminated": true
+  },
+  "dSbJaKzs4EO_c2RcXFJ3eegAcS35-J8x": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-21T11:31:39.807Z",
+    "lastActivity": "2026-05-21T12:01:04.107Z",
+    "expiresAt": "2026-05-21T19:31:39.807Z",
+    "terminated": true
+  },
+  "qJSjGNvTzw3wvG45uwDSRV5xSSiOJDXj": {
+    "username": "admin",
+    "ip": "172.18.0.1",
+    "browser": "Chrome 148",
+    "device": "Windows",
+    "location": null,
+    "startTime": "2026-05-21T12:03:00.158Z",
+    "lastActivity": "2026-05-21T12:27:52.314Z",
+    "expiresAt": "2026-05-21T20:03:00.158Z",
     "terminated": false
   }
 }

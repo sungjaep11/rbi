@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   webtop:
-    image: lscr.io/linuxserver/webtop:ubuntu-xfce
+    build: ./webtop
     container_name: webtop
     environment:
       - PUID=1000
