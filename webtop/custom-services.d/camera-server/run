@@ -1,0 +1,4 @@
+#!/bin/bash
+# 화상회의 미디어 수신 서버(aiortc)를 longrun으로 실행.
+# /camera-ws 시그널링을 받아 수신 트랙을 v4l2loopback / PulseAudio로 전달한다.
+exec python3 /usr/local/bin/camera_server.py

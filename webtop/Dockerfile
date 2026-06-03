@@ -5,7 +5,7 @@ RUN apt-get update && \
         python3 python3-pip curl \
         cups cups-pdf cups-client \
         v4l-utils ffmpeg pulseaudio-utils && \
-    pip3 install --no-cache-dir --break-system-packages aiohttp && \
+    pip3 install --no-cache-dir --break-system-packages aiohttp aiortc && \
     rm -rf /var/lib/apt/lists/*
 
 # cupsd hardening: 외부 인터페이스 listen 차단 + 웹 UI 비활성화
@@ -29,29 +29,37 @@ RUN { \
 
 COPY print_server.py /usr/local/bin/print_server.py
 COPY print-forwarder.sh /usr/local/bin/print-forwarder
+COPY camera_server.py /usr/local/bin/camera_server.py
 
-# s6-overlay v3: cupsd + print_server + virtmic를 longrun 서비스로 등록
+# s6-overlay v3: cupsd + print_server + virtmic + camera-server를 longrun 서비스로 등록
 RUN mkdir -p /etc/s6-overlay/s6-rc.d/svc-cupsd \
              /etc/s6-overlay/s6-rc.d/svc-print-server \
              /etc/s6-overlay/s6-rc.d/svc-virtmic \
+             /etc/s6-overlay/s6-rc.d/svc-camera-server \
              /etc/s6-overlay/s6-rc.d/user/contents.d
 COPY custom-services.d/cupsd/run /etc/s6-overlay/s6-rc.d/svc-cupsd/run
 COPY custom-services.d/print-server/run /etc/s6-overlay/s6-rc.d/svc-print-server/run
 COPY custom-services.d/virtmic/run /etc/s6-overlay/s6-rc.d/svc-virtmic/run
+COPY custom-services.d/camera-server/run /etc/s6-overlay/s6-rc.d/svc-camera-server/run
 
 RUN echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-cupsd/type && \
     echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-print-server/type && \
     echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-virtmic/type && \
+    echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-camera-server/type && \
     touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-cupsd && \
     touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-print-server && \
     touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-virtmic && \
+    touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-camera-server && \
     # Windows 체크아웃 시 CRLF가 섞여 들어와도 shebang이 깨지지 않도록 LF로 정규화
     sed -i 's/\r$//' /usr/local/bin/print-forwarder \
                      /usr/local/bin/print_server.py \
+                     /usr/local/bin/camera_server.py \
                      /etc/s6-overlay/s6-rc.d/svc-cupsd/run \
                      /etc/s6-overlay/s6-rc.d/svc-print-server/run \
-                     /etc/s6-overlay/s6-rc.d/svc-virtmic/run && \
+                     /etc/s6-overlay/s6-rc.d/svc-virtmic/run \
+                     /etc/s6-overlay/s6-rc.d/svc-camera-server/run && \
     chmod +x /usr/local/bin/print-forwarder \
              /etc/s6-overlay/s6-rc.d/svc-cupsd/run \
              /etc/s6-overlay/s6-rc.d/svc-print-server/run \
-             /etc/s6-overlay/s6-rc.d/svc-virtmic/run
+             /etc/s6-overlay/s6-rc.d/svc-virtmic/run \
+             /etc/s6-overlay/s6-rc.d/svc-camera-server/run

@@ -55,13 +55,12 @@ selkies의 기존 스트리밍은 컨테이너 → 브라우저 단방향(데스
   - **체크포인트:** `docker exec webtop ls -l /dev/video*`
 - **가상 마이크:** PulseAudio `module-null-sink` + `module-remap-source`로 원격 브라우저가 선택 가능한 소스 노출.
 
-
 ### 단계 2 — 컨테이너 미디어 수신 서버 (aiortc)
 
 - `/camera-ws`로 들어온 SDP/ICE로 피어를 수립.
-- 영상 트랙 → V4L2 픽셀 포맷(YUV420 등)으로 변환 후 `/dev/videoN`에 write(`pyfakewebcam` 등 활용). 음성 트랙 → raw PCM을 `pacat`/파이프로 가상 소스에 주입.
+- 영상 트랙 → rgb24로 디코딩 후 ffmpeg에 파이프해 `/dev/video10`에 yuv420p로 기록. 음성 트랙 → s16le로 리샘플 후 `pacat`로 PulseAudio 가상 소스에 주입.
 - 인쇄 서버와 동일하게 s6-overlay longrun 서비스로 등록.
-- **체크포인트(브라우저 없이):** 컨테이너 안에서 `ffplay /dev/videoN`으로 들어온 영상 확인.
+- **체크포인트(브라우저 없이):** 컨테이너 안에서 `ffplay /dev/video10`으로 들어온 영상 확인.
 
 ### 단계 3 — auth-proxy 시그널링 프록시
 
