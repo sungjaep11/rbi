@@ -20,6 +20,7 @@ const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const webtopHost = new URL(WEBTOP_URL).hostname;
 const WEBTOP_PRINT_WS = `ws://${webtopHost}:7777/ws`;
+const WEBTOP_CAMERA_WS = `ws://${webtopHost}:8888/camera-ws`;
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
@@ -805,11 +806,38 @@ const server = app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------------------------
-// 인쇄 WebSocket 프록시 — /print-ws 연결을 webtop 내부 서버로 중계
+// WebSocket 프록시 — /print-ws, /camera-ws 연결을 webtop 내부 서버로 중계
 // ---------------------------------------------------------------------------
 
 // handleUpgrade 전용 서버 인스턴스 (클라이언트를 직접 관리하지 않음)
-const printUpgrader = new WebSocket.Server({ noServer: true });
+const wsUpgrader = new WebSocket.Server({ noServer: true });
+
+// 브라우저 ↔ webtop 내부 서버 간 WebSocket 양방향 중계.
+// 인쇄(바이너리 PDF)와 카메라(SDP/ICE 텍스트) 모두 동일하게 passthrough된다.
+function proxyWsUpgrade(upstreamUrl, logTag, req, socket, head) {
+  const upstream = new WebSocket(upstreamUrl);
+  upstream.once('open', () => {
+    wsUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
+      browserWs.on('message', (data, isBinary) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+      });
+      upstream.on('message', (data, isBinary) => {
+        if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
+      });
+      upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
+      browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
+      upstream.on('error', err => {
+        console.error(`[${logTag}] upstream error:`, err.message);
+        try { browserWs.close(1011); } catch (_) {}
+      });
+    });
+  });
+  upstream.once('error', (err) => {
+    console.error(`[${logTag}] cannot connect to upstream:`, err.message);
+    socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+    socket.destroy();
+  });
+}
 
 // Forward WebSocket upgrades to webtop
 server.on('upgrade', (req, socket, head) => {
@@ -832,28 +860,13 @@ server.on('upgrade', (req, socket, head) => {
 
       // /print-ws → webtop 내부 print_server.py로 프록시
       if (req.url === '/print-ws') {
-        const upstream = new WebSocket(WEBTOP_PRINT_WS);
-        upstream.once('open', () => {
-          printUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
-            browserWs.on('message', (data, isBinary) => {
-              if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
-            });
-            upstream.on('message', (data, isBinary) => {
-              if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
-            });
-            upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
-            browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
-            upstream.on('error', err => {
-              console.error('[print-proxy] upstream error:', err.message);
-              try { browserWs.close(1011); } catch (_) {}
-            });
-          });
-        });
-        upstream.once('error', (err) => {
-          console.error('[print-proxy] cannot connect to webtop print server:', err.message);
-          socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-          socket.destroy();
-        });
+        proxyWsUpgrade(WEBTOP_PRINT_WS, 'print-proxy', req, socket, head);
+        return;
+      }
+
+      // /camera-ws → webtop 내부 camera_server.py로 프록시 (SDP/ICE 시그널링)
+      if (req.url === '/camera-ws') {
+        proxyWsUpgrade(WEBTOP_CAMERA_WS, 'camera-proxy', req, socket, head);
         return;
       }
 
