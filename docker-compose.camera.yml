@@ -1,0 +1,22 @@
+# 화상회의(카메라/마이크) 오버레이 — Linux 호스트 전용.
+#
+# 가상 마이크(PulseAudio)는 이미지의 svc-virtmic 서비스가 항상 준비하므로 추가 설정이 없다.
+# 가상 웹캠(v4l2loopback)만 호스트 커널 모듈 + 장치 매핑이 필요해 여기서 opt-in으로 얹는다.
+#
+# 호스트 사전 준비 (한 번):
+#   sudo apt-get install -y v4l2loopback-dkms
+#   sudo modprobe v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusive_caps=1
+#   # 영구 적용:
+#   #   echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+#   #   echo 'options v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusive_caps=1' \
+#   #     | sudo tee /etc/modprobe.d/v4l2loopback.conf
+#
+# 실행:
+#   docker compose -f docker-compose.yml -f docker-compose.camera.yml up --build
+
+services:
+  webtop:
+    devices:
+      - /dev/video10:/dev/video10
+    group_add:
+      - video   # /dev/video10 접근 권한 (호스트 video 그룹)

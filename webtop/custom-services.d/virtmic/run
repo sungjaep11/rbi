@@ -1,0 +1,55 @@
+#!/bin/bash
+# 가상 마이크 준비 — webtop의 PulseAudio에 null-sink + remap-source를 로드한다.
+#
+#   aiortc(단계 2)는  'virtmic_sink' 에 PCM을 써넣고,
+#   원격 브라우저는    'virtmic'(remap source) 를 마이크로 선택한다.
+#       [aiortc] --PCM--> virtmic_sink --(.monitor)--> virtmic --select--> [Chromium]
+#
+# PulseAudio는 데스크톱 사용자(abc, PUID)의 세션에서 구동되므로
+# 그 사용자/런타임 컨텍스트로 pactl을 호출해야 같은 인스턴스에 모듈이 올라간다.
+
+set -u
+
+SINK_NAME=virtmic_sink
+SOURCE_NAME=virtmic
+PUSER=abc
+PUID_VAL="${PUID:-1000}"
+
+export HOME=/config
+: "${XDG_RUNTIME_DIR:=/run/user/${PUID_VAL}}"
+export XDG_RUNTIME_DIR
+
+# abc 사용자/런타임 컨텍스트에서 pactl 실행.
+# pactl은 XDG_RUNTIME_DIR/pulse/native 소켓을 자동 탐색한다.
+# (pulse를 못 찾고 "PulseAudio 대기 중..."만 반복되면: docker exec webtop env | grep -i pulse
+#  로 실제 PULSE_SERVER 경로를 확인해 위 XDG_RUNTIME_DIR/export에 반영한다.)
+run_pactl() {
+    s6-setuidgid "$PUSER" env \
+        HOME="$HOME" \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        pactl "$@"
+}
+
+# PulseAudio가 IPC에 응답할 때까지 대기
+until run_pactl info >/dev/null 2>&1; do
+    echo "[svc-virtmic] PulseAudio 대기 중..." >&2
+    sleep 1
+done
+
+# 이미 로드돼 있으면 건너뜀 (s6 재기동 시 중복 로드 방지)
+if run_pactl list sources short 2>/dev/null | grep -qw "${SOURCE_NAME}"; then
+    echo "[svc-virtmic] 가상 마이크 '${SOURCE_NAME}' 이미 존재 — 건너뜀" >&2
+else
+    run_pactl load-module module-null-sink \
+        sink_name="${SINK_NAME}" \
+        sink_properties=device.description=RBI_Virtual_Mic_Sink \
+        && run_pactl load-module module-remap-source \
+            master="${SINK_NAME}.monitor" \
+            source_name="${SOURCE_NAME}" \
+            source_properties=device.description=RBI_Virtual_Microphone \
+        && echo "[svc-virtmic] 가상 마이크 '${SOURCE_NAME}' 등록 완료" >&2 \
+        || echo "[svc-virtmic] WARNING: 가상 마이크 등록 실패" >&2
+fi
+
+# s6 longrun: 종료하지 않고 supervised 상태 유지
+exec sleep infinity

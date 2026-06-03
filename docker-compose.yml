@@ -27,6 +27,9 @@ services:
     volumes:
       - webtop-config:/config
       - ./static-web/selkies-dashboard:/usr/share/selkies/selkies-dashboard
+    # 가상 웹캠(v4l2loopback) 장치 매핑은 docker-compose.camera.yml 오버레이로 분리.
+    #   카메라 기능을 쓸 때만(= Linux 호스트에서 모듈 로드 후):
+    #     docker compose -f docker-compose.yml -f docker-compose.camera.yml up --build
     # NOT exposed to host — only accessible through auth-proxy
     restart: unless-stopped
 
