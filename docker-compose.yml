@@ -20,6 +20,8 @@ services:
   webtop:
     build: ./webtop
     container_name: webtop
+    # Xorg/브라우저는 /dev/shm 기본 64MB로는 부족해 core dump가 난다 (webtop 권장 1GB).
+    shm_size: "1gb"
     environment:
       - PUID=1000
       - PGID=1000

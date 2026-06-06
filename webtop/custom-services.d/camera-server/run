@@ -1,4 +1,13 @@
 #!/bin/bash
 # 화상회의 미디어 수신 서버(aiortc)를 longrun으로 실행.
 # /camera-ws 시그널링을 받아 수신 트랙을 v4l2loopback / PulseAudio로 전달한다.
+
+# 컨테이너 환경변수(PUBLIC_IP 등 docker-compose -e)를 가져온다.
+# s6 run 스크립트는 기본적으로 docker env를 상속하지 않으므로 직접 import한다.
+if [ -d /run/s6/container_environment ]; then
+    for f in /run/s6/container_environment/*; do
+        [ -f "$f" ] && export "$(basename "$f")=$(cat "$f")"
+    done
+fi
+
 exec python3 /usr/local/bin/camera_server.py

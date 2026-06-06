@@ -3,9 +3,9 @@ FROM lscr.io/linuxserver/webtop:ubuntu-xfce
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-pip curl \
-        cups cups-pdf cups-client \
+        cups printer-driver-cups-pdf cups-client \
         v4l-utils ffmpeg pulseaudio-utils && \
-    pip3 install --no-cache-dir --break-system-packages aiohttp aiortc && \
+    pip3 install --no-cache-dir --break-system-packages aiohttp aiortc numpy && \
     rm -rf /var/lib/apt/lists/*
 
 # cupsd hardening: 외부 인터페이스 listen 차단 + 웹 UI 비활성화

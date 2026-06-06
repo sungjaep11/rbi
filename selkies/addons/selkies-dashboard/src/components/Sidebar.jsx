@@ -574,6 +574,17 @@ function Sidebar() {
   const [rbiPwdSuccess, setRbiPwdSuccess] = useState(false);
   const [rbiShowPwdForm, setRbiShowPwdForm] = useState(false);
 
+  // --- RBI: 화상회의(카메라/마이크) 상태 ---
+  // WebRTC 로직은 메인 페이지에 주입된 스크립트(window.rbiCamera)가 담당하고,
+  // 여기서는 그 API를 호출하고 상태 이벤트(rbi-camera-state)만 구독한다.
+  const [rbiCamState, setRbiCamState] = useState('idle');
+  useEffect(() => {
+    const onCam = (e) => setRbiCamState(e.detail?.state || 'idle');
+    window.addEventListener('rbi-camera-state', onCam);
+    if (window.rbiCamera?.getState) setRbiCamState(window.rbiCamera.getState());
+    return () => window.removeEventListener('rbi-camera-state', onCam);
+  }, []);
+
   useEffect(() => {
     const handleMessage = (event) => {
       if (
@@ -1164,6 +1175,7 @@ function Sidebar() {
     sharing: false,
     rbiAccount: false,
     rbiSessions: false,
+    rbiCamera: false,
   });
   const [notifications, setNotifications] = useState([]);
   const notificationTimeouts = useRef({});
@@ -2689,6 +2701,56 @@ function Sidebar() {
                   전체 세션 일괄 종료 (현재 제외)
                 </button>
               )}
+            </div>
+          )}
+        </div>
+        <div className="sidebar-section-divider"></div>
+
+        {/* ---- RBI: 화상회의 섹션 ---- */}
+        <div className="sidebar-section">
+          <div
+            className="sidebar-section-header"
+            onClick={() => toggleSection("rbiCamera")}
+            role="button"
+            aria-expanded={sectionsOpen.rbiCamera}
+            aria-controls="rbi-camera-content"
+            tabIndex="0"
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggleSection("rbiCamera")}
+          >
+            <h3 className="rbi-section-heading">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+              화상회의
+            </h3>
+            <span className="section-toggle-icon">
+              {sectionsOpen.rbiCamera ? <CaretUpIcon /> : <CaretDownIcon />}
+            </span>
+          </div>
+          {sectionsOpen.rbiCamera && (
+            <div className="sidebar-section-content" id="rbi-camera-content">
+              {(() => {
+                const map = {
+                  idle:       { label: '카메라 연결', cls: '',              sub: '로컬 카메라·마이크를 원격 브라우저로 전달합니다.' },
+                  connecting: { label: '연결 중…',    cls: 'rbi-btn-ghost', sub: '연결을 수립하는 중입니다…' },
+                  connected:  { label: '연결 끊기',   cls: 'rbi-btn-danger', sub: '🔴 카메라·마이크 전송 중' },
+                  retrying:   { label: '연결 끊기',   cls: 'rbi-btn-ghost', sub: '연결이 끊겨 재연결 대기 중…' },
+                  error:      { label: '다시 시도',   cls: '',              sub: '연결 실패 — 카메라/마이크 권한을 확인하세요.' },
+                };
+                const st = map[rbiCamState] || map.idle;
+                return (
+                  <>
+                    <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '8px', lineHeight: 1.4 }}>
+                      {st.sub}
+                    </div>
+                    <button
+                      className={`rbi-btn ${st.cls}`}
+                      disabled={rbiCamState === 'connecting'}
+                      onClick={() => window.rbiCamera && window.rbiCamera.toggle()}
+                    >
+                      {st.label}
+                    </button>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>

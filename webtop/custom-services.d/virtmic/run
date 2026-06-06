@@ -15,18 +15,28 @@ SOURCE_NAME=virtmic
 PUSER=abc
 PUID_VAL="${PUID:-1000}"
 
+# 컨테이너 env(PULSE_RUNTIME_PATH 등 이미지 ENV)를 가져온다.
+# s6 run 스크립트는 기본적으로 이를 상속하지 않으므로 직접 import한다.
+if [ -d /run/s6/container_environment ]; then
+    for f in /run/s6/container_environment/*; do
+        [ -f "$f" ] && export "$(basename "$f")=$(cat "$f")"
+    done
+fi
+
 export HOME=/config
+# PulseAudio 소켓 경로 확정: PULSE_SERVER > PULSE_RUNTIME_PATH/native > XDG_RUNTIME_DIR/pulse/native
 : "${XDG_RUNTIME_DIR:=/run/user/${PUID_VAL}}"
 export XDG_RUNTIME_DIR
+if [ -z "${PULSE_SERVER:-}" ]; then
+    export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH:-${XDG_RUNTIME_DIR}/pulse}/native"
+fi
 
-# abc 사용자/런타임 컨텍스트에서 pactl 실행.
-# pactl은 XDG_RUNTIME_DIR/pulse/native 소켓을 자동 탐색한다.
-# (pulse를 못 찾고 "PulseAudio 대기 중..."만 반복되면: docker exec webtop env | grep -i pulse
-#  로 실제 PULSE_SERVER 경로를 확인해 위 XDG_RUNTIME_DIR/export에 반영한다.)
+# abc 사용자 컨텍스트에서 pactl 실행 (PULSE_SERVER 상속).
 run_pactl() {
     s6-setuidgid "$PUSER" env \
         HOME="$HOME" \
         XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        PULSE_SERVER="$PULSE_SERVER" \
         pactl "$@"
 }
 

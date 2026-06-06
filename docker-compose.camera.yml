@@ -16,6 +16,11 @@
 
 services:
   webtop:
+    environment:
+      # 클라우드(EC2 등) 공인 IP. aiortc가 ICE host 후보를 이 IP로 광고한다.
+      #   실행 전: export PUBLIC_IP=<EC2 공인 IP>
+      #   (사설 IP만 광고하면 브라우저가 미디어 UDP에 닿지 못해 연결 실패)
+      - PUBLIC_IP=${PUBLIC_IP:-}
     devices:
       - /dev/video10:/dev/video10
     group_add:

@@ -284,6 +284,128 @@ const PRINT_CLIENT_SCRIPT = `
 `;
 
 // ---------------------------------------------------------------------------
+// 카메라/마이크 클라이언트 스크립트 (webtop HTML에 주입)
+// 로컬 getUserMedia 스트림을 /camera-ws(WebRTC)로 컨테이너에 보낸다.
+// 컨테이너의 camera_server.py가 v4l2loopback/PulseAudio 가상 장치로 전달한다.
+//
+// UI는 두지 않는다. 대신 window.rbiCamera API와 'rbi-camera-state' 이벤트를 노출하고,
+// 실제 토글 버튼/상태 표시는 selkies 대시보드의 "화상회의" 섹션이 담당한다.
+//   window.rbiCamera.toggle()/start()/stop()/getState()
+//   window.dispatchEvent(CustomEvent('rbi-camera-state', {detail:{state}}))
+//   state: 'idle' | 'connecting' | 'connected' | 'retrying' | 'error'
+// ---------------------------------------------------------------------------
+
+const CAMERA_CLIENT_SCRIPT = `
+<script>
+(function () {
+  var RETRY_MS = 5000;
+  var active = false;            // 사용자가 연결을 켰는지
+  var pc = null, ws = null, localStream = null, retryTimer = null;
+
+  function setState(s) {
+    window.__rbiCamState = s;
+    try { window.dispatchEvent(new CustomEvent('rbi-camera-state', { detail: { state: s } })); } catch (e) {}
+  }
+  setState('idle');
+
+  function waitIceComplete(pc) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(function (resolve) {
+      function check() {
+        if (pc.iceGatheringState === 'complete') {
+          pc.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      }
+      pc.addEventListener('icegatheringstatechange', check);
+    });
+  }
+
+  async function start() {
+    if (active) return;
+    active = true;
+    setState('connecting');
+    try {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch (e) {
+        // 카메라 없음/거부 → 오디오만 시도
+        console.warn('[camera] video 불가, audio만 전송:', e && e.name);
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    } catch (e) {
+      console.error('[camera] getUserMedia 실패:', e);
+      active = false;
+      setState('error');
+      return;
+    }
+    connect();
+  }
+
+  function connect() {
+    if (!active) return;
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    localStream.getTracks().forEach(function (t) { pc.addTrack(t, localStream); });
+
+    pc.onconnectionstatechange = function () {
+      if (!active) return;
+      if (pc.connectionState === 'connected') {
+        setState('connected');
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        scheduleRetry();
+      }
+    };
+
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/camera-ws');
+
+    ws.onopen = async function () {
+      var offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await waitIceComplete(pc);   // non-trickle: aiortc와 호환
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }));
+      }
+    };
+    ws.onmessage = async function (ev) {
+      var msg = JSON.parse(ev.data);
+      if (msg.type === 'answer') { await pc.setRemoteDescription(msg); }
+    };
+    ws.onclose = function () { if (active) scheduleRetry(); };
+    ws.onerror = function () { try { ws.close(); } catch (_) {} };
+  }
+
+  function scheduleRetry() {
+    cleanupConn();
+    if (!active || retryTimer) return;
+    setState('retrying');
+    retryTimer = setTimeout(function () { retryTimer = null; connect(); }, RETRY_MS);
+  }
+
+  function cleanupConn() {
+    if (ws) { try { ws.onclose = null; ws.close(); } catch (_) {} ws = null; }
+    if (pc) { try { pc.close(); } catch (_) {} pc = null; }
+  }
+
+  function stop() {
+    active = false;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    cleanupConn();
+    if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
+    setState('idle');
+  }
+
+  window.rbiCamera = {
+    start: start,
+    stop: stop,
+    toggle: function () { if (active) stop(); else start(); },
+    getState: function () { return window.__rbiCamState || 'idle'; },
+  };
+})();
+</script>
+`;
+
+// ---------------------------------------------------------------------------
 // Periodic cleanup — terminate expired sessions every minute
 // ---------------------------------------------------------------------------
 
@@ -780,7 +902,7 @@ app.get('/', requireAuth, (_req, res) => {
     proxyRes.on('end', () => {
       let html = Buffer.concat(chunks).toString('utf8');
       const tag = html.includes('</body>') ? '</body>' : '</html>';
-      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + tag);
+      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + CAMERA_CLIENT_SCRIPT + tag);
       const headers = { ...proxyRes.headers };
       delete headers['content-encoding'];
       delete headers['transfer-encoding'];
