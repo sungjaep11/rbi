@@ -16,3 +16,7 @@ auth-proxy/node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
