@@ -86,6 +86,63 @@ docker exec auth-proxy node scripts/create-admin.js admin mypassword admin
 
 로그인 성공 시 원격 데스크탑(WebTop) 화면이 표시됩니다.
 
+## 화상회의 (카메라·마이크)
+
+로컬 PC의 카메라/마이크를 원격 WebTop 브라우저로 전달해, 원격에서 실행되는 화상회의(Google Meet, Zoom 웹 등)가 이를 일반 웹캠/마이크로 인식하게 하는 기능입니다.
+
+### 요구사항
+
+- **마이크**: 추가 요구사항 없음 (컨테이너 내부 PulseAudio로 동작).
+- **카메라**: **호스트가 Linux**여야 하며 `v4l2loopback` 커널 모듈이 필요합니다. 이 모듈은 호스트 커널에 올리는 것이라 **Windows/macOS의 Docker Desktop에서는 카메라가 동작하지 않습니다**(마이크만 가능). 클라우드 Linux 인스턴스(EC2 등)나 Linux VM/PC에서 사용하세요.
+- 권장 사양: 데스크탑 + 브라우저 + 미디어 인코딩이 함께 도므로 **RAM 4GB 이상**(t3.medium 이상). 부족하면 스왑을 추가하세요.
+
+### 1. (Linux 호스트) v4l2loopback 로드
+
+```bash
+sudo apt-get install -y v4l2loopback-dkms
+sudo modprobe v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusive_caps=1
+ls -l /dev/video10   # 장치 생성 확인
+
+# (선택) 재부팅 후에도 자동 로드
+echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+printf 'options v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusive_caps=1\n' | sudo tee /etc/modprobe.d/v4l2loopback.conf
+```
+
+### 2. 카메라 오버레이로 실행
+
+카메라 기능은 `docker-compose.camera.yml` 오버레이로 분리되어 있습니다(메인 compose는 모듈 없는 환경에서도 그대로 동작).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.camera.yml up --build -d
+```
+
+> 미디어는 auth-proxy의 WebSocket 터널(`/camera-ws`, 8080)로 흐르므로 예전 WebRTC 방식과 달리 `PUBLIC_IP`나 별도 UDP 포트 개방이 필요 없습니다.
+
+### 3. 네트워크 / 보안 그룹
+
+브라우저 ↔ 컨테이너 **미디어는 8080의 WebSocket 터널**로 흐릅니다(태그된 JPEG 영상 + PCM16 오디오). 별도 미디어 포트가 없습니다. 단, 브라우저는 카메라/마이크(`getUserMedia`)를 **HTTPS 또는 localhost에서만** 허용합니다.
+
+클라우드라면 보안 그룹에서 아래를 허용하세요(소스는 본인 IP 권장):
+
+| 프로토콜·포트 | 용도 |
+|---|---|
+| TCP 22 | SSH (터널용) |
+| TCP 443 | HTTPS로 접속할 경우 |
+
+`getUserMedia` 보안 컨텍스트 확보 (택1):
+- **SSH 터널(간단)**: `ssh -L 8080:localhost:8080 user@<서버>` 후 `http://localhost:8080` 접속. (미디어도 이 WS 터널을 그대로 타므로 추가 포트 개방이 필요 없습니다.)
+- **HTTPS**: 443에 도메인 + 인증서를 두고 `https://...`로 접속.
+
+### 4. 사용 방법
+
+1. `http://localhost:8080`(터널) 또는 `https://...`로 로그인합니다.
+2. WebTop 화면의 **사이드바 → "화상회의" 섹션**(계정·활성 세션 아래)을 펼치고 **"카메라 연결"**을 클릭 → 브라우저의 카메라/마이크 권한을 **허용**합니다. 상태가 `🔴 카메라·마이크 전송 중`이 되면 연결된 것입니다.
+3. **원격 브라우저(WebTop 안 Chromium)**에서 화상회의 사이트에 접속해 장치를 선택합니다:
+   - 카메라: **RBI Virtual Camera**
+   - 마이크: **RBI Virtual Microphone**
+4. Google Meet 등 실제 사이트에서도 동일하게 위 장치를 고르면 됩니다.
+
+
 ## 컨테이너 관리
 
 ```bash
@@ -220,3 +277,7 @@ GOOGLE_CLIENT_SECRET=복사한_클라이언트_보안_비밀번호
 - 로그인 시 세션 재생성 (세션 고정 공격 방지)
 - WebTop 컨테이너는 외부에 직접 노출되지 않음
 - Google OAuth: 환경 변수가 없으면 전략이 등록되지 않아 Google 로그인 경로가 비활성화됨
+
+## 개발 도구
+
+이 프로젝트는 Claude Code (Opus 4.8)를 활용하여 개발되었습니다.

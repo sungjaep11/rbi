@@ -4,9 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "core": "npm --prefix ../selkies-web-core install && npm --prefix ../selkies-web-core run build && node -e \"require('fs').copyFileSync('../selkies-web-core/dist/selkies-core.js','src/selkies-core.js')\"",
+    "predev": "npm run core",
     "dev": "vite",
     "serve": "vite",
+    "prebuild": "npm run core",
     "build": "vite build",
+    "predeploy": "npm run core",
     "deploy": "vite build --outDir ../../../static-web/selkies-dashboard --emptyOutDir",
     "lint": "eslint .",
     "preview": "vite preview"

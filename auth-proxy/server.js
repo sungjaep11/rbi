@@ -20,6 +20,7 @@ const WEBTOP_URL = process.env.WEBTOP_URL || 'http://webtop:3000';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const webtopHost = new URL(WEBTOP_URL).hostname;
 const WEBTOP_PRINT_WS = `ws://${webtopHost}:7777/ws`;
+const WEBTOP_CAMERA_WS = `ws://${webtopHost}:8888/camera-ws`;
 const DB_PATH = path.join(__dirname, 'db', 'users.json');
 const SESSIONS_PATH = path.join(__dirname, 'db', 'sessions.json');
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000; // 8 hours
@@ -278,6 +279,176 @@ const PRINT_CLIENT_SCRIPT = `
   }
 
   connect();
+})();
+</script>
+`;
+
+// ---------------------------------------------------------------------------
+// 카메라/마이크 클라이언트 스크립트 (webtop HTML에 주입)
+// 로컬 getUserMedia 스트림을 /camera-ws(WebSocket)로 컨테이너에 보낸다.
+// WebRTC가 아니라 auth-proxy WS 터널로 태그된 바이너리 프레임을 직접 보낸다:
+//   [0x01] + JPEG bytes   → 영상 (~CAPTURE_FPS, canvas.toBlob)
+//   [0x02] + PCM16 LE     → 오디오 (AudioWorklet, selkies 마이크와 동일 패턴)
+// 컨테이너의 camera_server.py가 PyAV→pyvirtualcam / PyAudio→PulseAudio로 전달한다.
+//
+// UI는 두지 않는다. 대신 window.rbiCamera API와 'rbi-camera-state' 이벤트를 노출하고,
+// 실제 토글 버튼/상태 표시는 selkies 대시보드의 "화상회의" 섹션이 담당한다.
+//   window.rbiCamera.toggle()/start()/stop()/getState()
+//   window.dispatchEvent(CustomEvent('rbi-camera-state', {detail:{state}}))
+//   state: 'idle' | 'connecting' | 'connected' | 'retrying' | 'error'
+// ---------------------------------------------------------------------------
+
+const CAMERA_CLIENT_SCRIPT = `
+<script>
+(function () {
+  var RETRY_MS = 5000;
+  var CAPTURE_FPS = 15;          // WS로 보낼 JPEG 프레임율
+  var JPEG_QUALITY = 0.6;
+  var AUDIO_RATE = 48000;        // camera_server.py와 합의된 PCM16 mono 레이트
+  var TAG_VIDEO = 0x01, TAG_AUDIO = 0x02;
+
+  var active = false;            // 사용자가 연결을 켰는지
+  var ws = null, localStream = null, retryTimer = null;
+  var videoEl = null, canvas = null, ctx = null, videoTimer = null;
+  var audioCtx = null, micNode = null, micSource = null;
+
+  function setState(s) {
+    window.__rbiCamState = s;
+    try { window.dispatchEvent(new CustomEvent('rbi-camera-state', { detail: { state: s } })); } catch (e) {}
+  }
+  setState('idle');
+
+  // PCM16 mono 추출 worklet (selkies 마이크 패턴: Float32 → Int16, ArrayBuffer로 postMessage)
+  var WORKLET_CODE =
+    'class P extends AudioWorkletProcessor{' +
+    'process(inputs){' +
+      'var ch=inputs[0]&&inputs[0][0];' +
+      'if(!ch){return true;}' +
+      'var n=ch.length,buf=new Int16Array(n);' +
+      'for(var i=0;i<n;i++){var s=Math.max(-1,Math.min(1,ch[i]));buf[i]=s<0?s*0x8000:s*0x7FFF;}' +
+      'this.port.postMessage(buf.buffer,[buf.buffer]);' +
+      'return true;' +
+    '}}' +
+    'registerProcessor("rbi-mic",P);';
+
+  function send(tag, payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    var msg = new Uint8Array(1 + payload.byteLength);
+    msg[0] = tag;
+    msg.set(new Uint8Array(payload), 1);
+    try { ws.send(msg.buffer); } catch (e) {}
+  }
+
+  async function start() {
+    if (active) return;
+    active = true;
+    setState('connecting');
+    try {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch (e) {
+        // 카메라 없음/거부 → 오디오만 시도
+        console.warn('[camera] video 불가, audio만 전송:', e && e.name);
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    } catch (e) {
+      console.error('[camera] getUserMedia 실패:', e);
+      active = false;
+      setState('error');
+      return;
+    }
+    connect();
+  }
+
+  function connect() {
+    if (!active) return;
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/camera-ws');
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function () {
+      setState('connected');
+      startVideoPump();
+      startAudioPump();
+    };
+    ws.onclose = function () { if (active) scheduleRetry(); };
+    ws.onerror = function () { try { ws.close(); } catch (_) {} };
+  }
+
+  function startVideoPump() {
+    if (videoTimer) return;
+    var track = localStream.getVideoTracks()[0];
+    if (!track) return;  // 오디오 전용 — 영상 펌프 생략
+    videoEl = document.createElement('video');
+    videoEl.muted = true; videoEl.playsInline = true;
+    videoEl.srcObject = localStream;
+    videoEl.play().catch(function () {});
+    canvas = document.createElement('canvas');
+
+    videoTimer = setInterval(function () {
+      if (!videoEl.videoWidth || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (canvas.width !== videoEl.videoWidth) {
+        canvas.width = videoEl.videoWidth;
+        canvas.height = videoEl.videoHeight;
+        ctx = canvas.getContext('2d');
+      }
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function (blob) {
+        if (!blob) return;
+        blob.arrayBuffer().then(function (buf) { send(TAG_VIDEO, buf); });
+      }, 'image/jpeg', JPEG_QUALITY);
+    }, Math.round(1000 / CAPTURE_FPS));
+  }
+
+  async function startAudioPump() {
+    var track = localStream.getAudioTracks()[0];
+    if (!track) return;
+    try {
+      audioCtx = new AudioContext({ sampleRate: AUDIO_RATE });
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      var url = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
+      try { await audioCtx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+      micSource = audioCtx.createMediaStreamSource(localStream);
+      micNode = new AudioWorkletNode(audioCtx, 'rbi-mic');
+      micNode.port.onmessage = function (ev) {
+        if (ev.data && ev.data.byteLength) send(TAG_AUDIO, ev.data);
+      };
+      micSource.connect(micNode);
+    } catch (e) {
+      console.error('[camera] 오디오 캡처 실패:', e);
+    }
+  }
+
+  function scheduleRetry() {
+    cleanupConn();
+    if (!active || retryTimer) return;
+    setState('retrying');
+    retryTimer = setTimeout(function () { retryTimer = null; connect(); }, RETRY_MS);
+  }
+
+  function cleanupConn() {
+    if (videoTimer) { clearInterval(videoTimer); videoTimer = null; }
+    if (videoEl) { try { videoEl.pause(); videoEl.srcObject = null; } catch (_) {} videoEl = null; }
+    canvas = null; ctx = null;
+    if (micNode) { try { micNode.port.onmessage = null; micSource.disconnect(); micNode.disconnect(); } catch (_) {} micNode = null; micSource = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+    if (ws) { try { ws.onclose = null; ws.close(); } catch (_) {} ws = null; }
+  }
+
+  function stop() {
+    active = false;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    cleanupConn();
+    if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
+    setState('idle');
+  }
+
+  window.rbiCamera = {
+    start: start,
+    stop: stop,
+    toggle: function () { if (active) stop(); else start(); },
+    getState: function () { return window.__rbiCamState || 'idle'; },
+  };
 })();
 </script>
 `;
@@ -779,7 +950,7 @@ app.get('/', requireAuth, (_req, res) => {
     proxyRes.on('end', () => {
       let html = Buffer.concat(chunks).toString('utf8');
       const tag = html.includes('</body>') ? '</body>' : '</html>';
-      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + tag);
+      html = html.replace(tag, SESSION_MONITOR_SCRIPT + PRINT_CLIENT_SCRIPT + CAMERA_CLIENT_SCRIPT + tag);
       const headers = { ...proxyRes.headers };
       delete headers['content-encoding'];
       delete headers['transfer-encoding'];
@@ -805,11 +976,38 @@ const server = app.listen(PORT, () => {
 });
 
 // ---------------------------------------------------------------------------
-// 인쇄 WebSocket 프록시 — /print-ws 연결을 webtop 내부 서버로 중계
+// WebSocket 프록시 — /print-ws, /camera-ws 연결을 webtop 내부 서버로 중계
 // ---------------------------------------------------------------------------
 
 // handleUpgrade 전용 서버 인스턴스 (클라이언트를 직접 관리하지 않음)
-const printUpgrader = new WebSocket.Server({ noServer: true });
+const wsUpgrader = new WebSocket.Server({ noServer: true });
+
+// 브라우저 ↔ webtop 내부 서버 간 WebSocket 양방향 중계.
+// 인쇄(바이너리 PDF)와 카메라(SDP/ICE 텍스트) 모두 동일하게 passthrough된다.
+function proxyWsUpgrade(upstreamUrl, logTag, req, socket, head) {
+  const upstream = new WebSocket(upstreamUrl);
+  upstream.once('open', () => {
+    wsUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
+      browserWs.on('message', (data, isBinary) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+      });
+      upstream.on('message', (data, isBinary) => {
+        if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
+      });
+      upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
+      browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
+      upstream.on('error', err => {
+        console.error(`[${logTag}] upstream error:`, err.message);
+        try { browserWs.close(1011); } catch (_) {}
+      });
+    });
+  });
+  upstream.once('error', (err) => {
+    console.error(`[${logTag}] cannot connect to upstream:`, err.message);
+    socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+    socket.destroy();
+  });
+}
 
 // Forward WebSocket upgrades to webtop
 server.on('upgrade', (req, socket, head) => {
@@ -832,28 +1030,13 @@ server.on('upgrade', (req, socket, head) => {
 
       // /print-ws → webtop 내부 print_server.py로 프록시
       if (req.url === '/print-ws') {
-        const upstream = new WebSocket(WEBTOP_PRINT_WS);
-        upstream.once('open', () => {
-          printUpgrader.handleUpgrade(req, socket, head, (browserWs) => {
-            browserWs.on('message', (data, isBinary) => {
-              if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
-            });
-            upstream.on('message', (data, isBinary) => {
-              if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data, { binary: isBinary });
-            });
-            upstream.on('close', () => { try { browserWs.close(); } catch (_) {} });
-            browserWs.on('close', () => { try { upstream.close(); } catch (_) {} });
-            upstream.on('error', err => {
-              console.error('[print-proxy] upstream error:', err.message);
-              try { browserWs.close(1011); } catch (_) {}
-            });
-          });
-        });
-        upstream.once('error', (err) => {
-          console.error('[print-proxy] cannot connect to webtop print server:', err.message);
-          socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-          socket.destroy();
-        });
+        proxyWsUpgrade(WEBTOP_PRINT_WS, 'print-proxy', req, socket, head);
+        return;
+      }
+
+      // /camera-ws → webtop 내부 camera_server.py로 프록시 (SDP/ICE 시그널링)
+      if (req.url === '/camera-ws') {
+        proxyWsUpgrade(WEBTOP_CAMERA_WS, 'camera-proxy', req, socket, head);
         return;
       }
 
