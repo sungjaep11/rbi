@@ -3,6 +3,9 @@
 # 가상 마이크(PulseAudio)는 이미지의 svc-virtmic 서비스가 항상 준비하므로 추가 설정이 없다.
 # 가상 웹캠(v4l2loopback)만 호스트 커널 모듈 + 장치 매핑이 필요해 여기서 opt-in으로 얹는다.
 #
+# 미디어는 auth-proxy WebSocket 터널(/camera-ws)로 흐르므로 STUN/공인 IP 설정이 없다.
+# (예전 WebRTC 방식의 PUBLIC_IP/ICE 재작성은 제거됨.)
+#
 # 호스트 사전 준비 (한 번):
 #   sudo apt-get install -y v4l2loopback-dkms
 #   sudo modprobe v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusive_caps=1
@@ -16,11 +19,6 @@
 
 services:
   webtop:
-    environment:
-      # 클라우드(EC2 등) 공인 IP. aiortc가 ICE host 후보를 이 IP로 광고한다.
-      #   실행 전: export PUBLIC_IP=<EC2 공인 IP>
-      #   (사설 IP만 광고하면 브라우저가 미디어 UDP에 닿지 못해 연결 실패)
-      - PUBLIC_IP=${PUBLIC_IP:-}
     devices:
       - /dev/video10:/dev/video10
     group_add:

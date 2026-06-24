@@ -285,8 +285,11 @@ const PRINT_CLIENT_SCRIPT = `
 
 // ---------------------------------------------------------------------------
 // 카메라/마이크 클라이언트 스크립트 (webtop HTML에 주입)
-// 로컬 getUserMedia 스트림을 /camera-ws(WebRTC)로 컨테이너에 보낸다.
-// 컨테이너의 camera_server.py가 v4l2loopback/PulseAudio 가상 장치로 전달한다.
+// 로컬 getUserMedia 스트림을 /camera-ws(WebSocket)로 컨테이너에 보낸다.
+// WebRTC가 아니라 auth-proxy WS 터널로 태그된 바이너리 프레임을 직접 보낸다:
+//   [0x01] + JPEG bytes   → 영상 (~CAPTURE_FPS, canvas.toBlob)
+//   [0x02] + PCM16 LE     → 오디오 (AudioWorklet, selkies 마이크와 동일 패턴)
+// 컨테이너의 camera_server.py가 PyAV→pyvirtualcam / PyAudio→PulseAudio로 전달한다.
 //
 // UI는 두지 않는다. 대신 window.rbiCamera API와 'rbi-camera-state' 이벤트를 노출하고,
 // 실제 토글 버튼/상태 표시는 selkies 대시보드의 "화상회의" 섹션이 담당한다.
@@ -299,8 +302,15 @@ const CAMERA_CLIENT_SCRIPT = `
 <script>
 (function () {
   var RETRY_MS = 5000;
+  var CAPTURE_FPS = 15;          // WS로 보낼 JPEG 프레임율
+  var JPEG_QUALITY = 0.6;
+  var AUDIO_RATE = 48000;        // camera_server.py와 합의된 PCM16 mono 레이트
+  var TAG_VIDEO = 0x01, TAG_AUDIO = 0x02;
+
   var active = false;            // 사용자가 연결을 켰는지
-  var pc = null, ws = null, localStream = null, retryTimer = null;
+  var ws = null, localStream = null, retryTimer = null;
+  var videoEl = null, canvas = null, ctx = null, videoTimer = null;
+  var audioCtx = null, micNode = null, micSource = null;
 
   function setState(s) {
     window.__rbiCamState = s;
@@ -308,17 +318,25 @@ const CAMERA_CLIENT_SCRIPT = `
   }
   setState('idle');
 
-  function waitIceComplete(pc) {
-    if (pc.iceGatheringState === 'complete') return Promise.resolve();
-    return new Promise(function (resolve) {
-      function check() {
-        if (pc.iceGatheringState === 'complete') {
-          pc.removeEventListener('icegatheringstatechange', check);
-          resolve();
-        }
-      }
-      pc.addEventListener('icegatheringstatechange', check);
-    });
+  // PCM16 mono 추출 worklet (selkies 마이크 패턴: Float32 → Int16, ArrayBuffer로 postMessage)
+  var WORKLET_CODE =
+    'class P extends AudioWorkletProcessor{' +
+    'process(inputs){' +
+      'var ch=inputs[0]&&inputs[0][0];' +
+      'if(!ch){return true;}' +
+      'var n=ch.length,buf=new Int16Array(n);' +
+      'for(var i=0;i<n;i++){var s=Math.max(-1,Math.min(1,ch[i]));buf[i]=s<0?s*0x8000:s*0x7FFF;}' +
+      'this.port.postMessage(buf.buffer,[buf.buffer]);' +
+      'return true;' +
+    '}}' +
+    'registerProcessor("rbi-mic",P);';
+
+  function send(tag, payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    var msg = new Uint8Array(1 + payload.byteLength);
+    msg[0] = tag;
+    msg.set(new Uint8Array(payload), 1);
+    try { ws.send(msg.buffer); } catch (e) {}
   }
 
   async function start() {
@@ -344,35 +362,61 @@ const CAMERA_CLIENT_SCRIPT = `
 
   function connect() {
     if (!active) return;
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-    localStream.getTracks().forEach(function (t) { pc.addTrack(t, localStream); });
-
-    pc.onconnectionstatechange = function () {
-      if (!active) return;
-      if (pc.connectionState === 'connected') {
-        setState('connected');
-      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        scheduleRetry();
-      }
-    };
-
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/camera-ws');
+    ws.binaryType = 'arraybuffer';
 
-    ws.onopen = async function () {
-      var offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await waitIceComplete(pc);   // non-trickle: aiortc와 호환
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }));
-      }
-    };
-    ws.onmessage = async function (ev) {
-      var msg = JSON.parse(ev.data);
-      if (msg.type === 'answer') { await pc.setRemoteDescription(msg); }
+    ws.onopen = function () {
+      setState('connected');
+      startVideoPump();
+      startAudioPump();
     };
     ws.onclose = function () { if (active) scheduleRetry(); };
     ws.onerror = function () { try { ws.close(); } catch (_) {} };
+  }
+
+  function startVideoPump() {
+    if (videoTimer) return;
+    var track = localStream.getVideoTracks()[0];
+    if (!track) return;  // 오디오 전용 — 영상 펌프 생략
+    videoEl = document.createElement('video');
+    videoEl.muted = true; videoEl.playsInline = true;
+    videoEl.srcObject = localStream;
+    videoEl.play().catch(function () {});
+    canvas = document.createElement('canvas');
+
+    videoTimer = setInterval(function () {
+      if (!videoEl.videoWidth || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (canvas.width !== videoEl.videoWidth) {
+        canvas.width = videoEl.videoWidth;
+        canvas.height = videoEl.videoHeight;
+        ctx = canvas.getContext('2d');
+      }
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function (blob) {
+        if (!blob) return;
+        blob.arrayBuffer().then(function (buf) { send(TAG_VIDEO, buf); });
+      }, 'image/jpeg', JPEG_QUALITY);
+    }, Math.round(1000 / CAPTURE_FPS));
+  }
+
+  async function startAudioPump() {
+    var track = localStream.getAudioTracks()[0];
+    if (!track) return;
+    try {
+      audioCtx = new AudioContext({ sampleRate: AUDIO_RATE });
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      var url = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
+      try { await audioCtx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+      micSource = audioCtx.createMediaStreamSource(localStream);
+      micNode = new AudioWorkletNode(audioCtx, 'rbi-mic');
+      micNode.port.onmessage = function (ev) {
+        if (ev.data && ev.data.byteLength) send(TAG_AUDIO, ev.data);
+      };
+      micSource.connect(micNode);
+    } catch (e) {
+      console.error('[camera] 오디오 캡처 실패:', e);
+    }
   }
 
   function scheduleRetry() {
@@ -383,8 +427,12 @@ const CAMERA_CLIENT_SCRIPT = `
   }
 
   function cleanupConn() {
+    if (videoTimer) { clearInterval(videoTimer); videoTimer = null; }
+    if (videoEl) { try { videoEl.pause(); videoEl.srcObject = null; } catch (_) {} videoEl = null; }
+    canvas = null; ctx = null;
+    if (micNode) { try { micNode.port.onmessage = null; micSource.disconnect(); micNode.disconnect(); } catch (_) {} micNode = null; micSource = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
     if (ws) { try { ws.onclose = null; ws.close(); } catch (_) {} ws = null; }
-    if (pc) { try { pc.close(); } catch (_) {} pc = null; }
   }
 
   function stop() {

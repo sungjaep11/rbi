@@ -1,8 +1,14 @@
 #!/bin/bash
-# 화상회의 미디어 수신 서버(aiortc)를 longrun으로 실행.
-# /camera-ws 시그널링을 받아 수신 트랙을 v4l2loopback / PulseAudio로 전달한다.
+# 화상회의 미디어 수신 서버를 longrun으로 실행.
+# /camera-ws로 들어온 태그된 바이너리(JPEG 영상 / PCM16 오디오)를
+# PyAV→pyvirtualcam(v4l2loopback) / PyAudio→PulseAudio(virtmic_sink)로 전달한다.
 
-# 컨테이너 환경변수(PUBLIC_IP 등 docker-compose -e)를 가져온다.
+set -u
+
+PUSER=abc
+PUID_VAL="${PUID:-1000}"
+
+# 컨테이너 환경변수(docker-compose env)를 가져온다.
 # s6 run 스크립트는 기본적으로 docker env를 상속하지 않으므로 직접 import한다.
 if [ -d /run/s6/container_environment ]; then
     for f in /run/s6/container_environment/*; do
@@ -10,4 +16,20 @@ if [ -d /run/s6/container_environment ]; then
     done
 fi
 
-exec python3 /usr/local/bin/camera_server.py
+# PyAudio가 abc의 PulseAudio 세션(virtmic_sink)에 붙도록 소켓 경로를 확정한다.
+# (virtmic/run과 동일한 규칙: PULSE_SERVER > PULSE_RUNTIME_PATH/native > XDG_RUNTIME_DIR/pulse/native)
+export HOME=/config
+: "${XDG_RUNTIME_DIR:=/run/user/${PUID_VAL}}"
+export XDG_RUNTIME_DIR
+if [ -z "${PULSE_SERVER:-}" ]; then
+    export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH:-${XDG_RUNTIME_DIR}/pulse}/native"
+fi
+export CAMERA_PULSE_SINK="${CAMERA_PULSE_SINK:-virtmic_sink}"
+
+# abc 사용자로 실행: PulseAudio 세션 접근 + /dev/video10(video 그룹, compose group_add) 접근.
+exec s6-setuidgid "$PUSER" env \
+    HOME="$HOME" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    PULSE_SERVER="$PULSE_SERVER" \
+    CAMERA_PULSE_SINK="$CAMERA_PULSE_SINK" \
+    python3 /usr/local/bin/camera_server.py

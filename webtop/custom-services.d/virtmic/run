@@ -1,9 +1,9 @@
 #!/bin/bash
 # 가상 마이크 준비 — webtop의 PulseAudio에 null-sink + remap-source를 로드한다.
 #
-#   aiortc(단계 2)는  'virtmic_sink' 에 PCM을 써넣고,
-#   원격 브라우저는    'virtmic'(remap source) 를 마이크로 선택한다.
-#       [aiortc] --PCM--> virtmic_sink --(.monitor)--> virtmic --select--> [Chromium]
+#   camera_server.py(PyAudio)는 'virtmic_sink' 에 PCM을 써넣고,
+#   원격 브라우저는        'virtmic'(remap source) 를 마이크로 선택한다.
+#       [PyAudio] --PCM--> virtmic_sink --(.monitor)--> virtmic --select--> [Chromium]
 #
 # PulseAudio는 데스크톱 사용자(abc, PUID)의 세션에서 구동되므로
 # 그 사용자/런타임 컨텍스트로 pactl을 호출해야 같은 인스턴스에 모듈이 올라간다.

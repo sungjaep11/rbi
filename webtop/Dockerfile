@@ -1,11 +1,17 @@
 FROM lscr.io/linuxserver/webtop:ubuntu-xfce
 
+# camera_server.py는 subprocess(ffmpeg/pacat) 대신 라이브러리를 직접 쓴다:
+#   영상 PyAV(av) → pyvirtualcam(v4l2loopback), 오디오 PyAudio → PulseAudio.
+# PyAV는 ffmpeg 라이브러리를 번들하므로 apt ffmpeg는 불필요.
+# pulseaudio-utils(pactl)는 virtmic 서비스가 가상 마이크를 만들 때 여전히 필요.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-pip curl \
         cups printer-driver-cups-pdf cups-client \
-        v4l-utils ffmpeg pulseaudio-utils && \
-    pip3 install --no-cache-dir --break-system-packages aiohttp aiortc numpy && \
+        v4l-utils pulseaudio-utils \
+        portaudio19-dev libportaudio2 && \
+    pip3 install --no-cache-dir --break-system-packages \
+        aiohttp numpy av pyvirtualcam pyaudio && \
     rm -rf /var/lib/apt/lists/*
 
 # cupsd hardening: 외부 인터페이스 listen 차단 + 웹 UI 비활성화
