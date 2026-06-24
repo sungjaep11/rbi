@@ -113,28 +113,24 @@ printf 'options v4l2loopback video_nr=10 card_label="RBI Virtual Camera" exclusi
 카메라 기능은 `docker-compose.camera.yml` 오버레이로 분리되어 있습니다(메인 compose는 모듈 없는 환경에서도 그대로 동작).
 
 ```bash
-# (클라우드/NAT 뒤인 경우) 공인 IP 지정 — WebRTC ICE 후보로 광고됨
-export PUBLIC_IP=<서버_공인_IP>
-
 docker compose -f docker-compose.yml -f docker-compose.camera.yml up --build -d
 ```
 
-> **PUBLIC_IP**: NAT 뒤(클라우드 등)에 있을 때 필수입니다. 설정하지 않으면 컨테이너의 사설 IP만 ICE 후보로 광고되어 브라우저가 미디어에 연결하지 못합니다. 같은 LAN/로컬 호스트면 생략 가능합니다. (인스턴스를 stop/start 하면 공인 IP가 바뀔 수 있으니 매번 다시 지정하거나 고정 IP를 사용하세요.)
+> 미디어는 auth-proxy의 WebSocket 터널(`/camera-ws`, 8080)로 흐르므로 예전 WebRTC 방식과 달리 `PUBLIC_IP`나 별도 UDP 포트 개방이 필요 없습니다.
 
 ### 3. 네트워크 / 보안 그룹
 
-브라우저 ↔ 컨테이너 **미디어는 WebRTC(UDP)** 로 흐릅니다. 또한 브라우저는 카메라/마이크(`getUserMedia`)를 **HTTPS 또는 localhost에서만** 허용합니다.
+브라우저 ↔ 컨테이너 **미디어는 8080의 WebSocket 터널**로 흐릅니다(태그된 JPEG 영상 + PCM16 오디오). 별도 미디어 포트가 없습니다. 단, 브라우저는 카메라/마이크(`getUserMedia`)를 **HTTPS 또는 localhost에서만** 허용합니다.
 
 클라우드라면 보안 그룹에서 아래를 허용하세요(소스는 본인 IP 권장):
 
 | 프로토콜·포트 | 용도 |
 |---|---|
 | TCP 22 | SSH (터널용) |
-| UDP 32768–60999 | WebRTC 미디어 (없으면 영상·소리 안 흐름) |
 | TCP 443 | HTTPS로 접속할 경우 |
 
 `getUserMedia` 보안 컨텍스트 확보 (택1):
-- **SSH 터널(간단)**: `ssh -L 8080:localhost:8080 user@<서버>` 후 `http://localhost:8080` 접속. (미디어 UDP는 터널을 타지 않으므로 위 UDP 범위는 그대로 열어야 합니다.)
+- **SSH 터널(간단)**: `ssh -L 8080:localhost:8080 user@<서버>` 후 `http://localhost:8080` 접속. (미디어도 이 WS 터널을 그대로 타므로 추가 포트 개방이 필요 없습니다.)
 - **HTTPS**: 443에 도메인 + 인증서를 두고 `https://...`로 접속.
 
 ### 4. 사용 방법
